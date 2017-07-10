@@ -1,0 +1,177 @@
+---
+title: "Deep Learning with R"
+output: html_document
+---
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("caret", "nnet", prompt = FALSE)
+```
+
+## Introduction
+
+This document shows how to train and use deep learning models or deep neural networks in the R programming language and environment.  it will give you enough background to help you understand their basics and use 
+and interpret the results.
+
+Machine learning is used to develop algorithms that learn from raw data in order to make predictions. Deep learning is a branch of machine learning where a multilayered (deep) architecture is used to map the relations between inputs or observed features and the outcome. This deep architecture makes deep learning particularly suitable for handling a large number of variables and generate features as part of the overall learning algorithm, rather than feature creation being a separate step.
+
+## Deep Learning - The Basics
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning1.JPG")
+```
+
+### Introduction
+
+Deep Learning is the most exciting and powerful branch of Machine Learning. Deep Learning models can be used for a variety of complex tasks:
+
+- Artificial Neural Networks for Regression and Classification
+- Convolutional Neural Networks for Computer Vision
+- Recurrent Neural Networks for Time Series Analysis
+- Self Organizing Maps for Feature Extraction
+- Deep Boltzmann Machines for Recommendation Systems
+- Auto Encoders for Recommendation Systems
+
+#### Neuron
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning2.JPG")
+knitr::include_graphics("./images/deeplearning3.JPG")
+knitr::include_graphics("./images/deeplearning4.JPG")
+knitr::include_graphics("./images/deeplearning5.JPG")
+```
+
+The <span style="color:green">green node</span> above represents a neuron in a hidden layer.
+
+#### Activation Function
+Let's review the primary activation functions (there are many more).
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning6.JPG")
+knitr::include_graphics("./images/deeplearning7.JPG")
+```
+
+The one below is most often used:
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning8.JPG")
+knitr::include_graphics("./images/deeplearning9.JPG")
+```
+
+#### How do Neural Networks learn?
+
+A neural network with a single layer feed forward is called a perceptron.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning10.JPG")
+```
+
+A perceptron will calculate a value.  The difference between the predicted value and the actual value we want is called the cost function.  There are many ways to calculate the cost function but the most common is 1/2 the squared difference.  This is basically the error of the predicted value.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning11.JPG")
+```
+
+When the perceptron evaluates the cost function, the neural net will recalculate new weights to minimize the cost function.  Back propagation adjusts all of the weights at the same time.  
+
+Here is an example:
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning12.JPG")
+```
+
+Note above that the Exam column is the actual value.
+
+After calculating the cost function, the net adjusts the weights of this specific record to reduce the cost function.  Only one record is being evaluated.  This continues until cost function is minimized.  (Ideally yhat = y.) 
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning13.JPG")
+```
+
+Lets now evaluate what happens when we have many records.
+
+For each row, the neural net processes each row sequentially and calculates yhat, compares it to y and calculates the cost function across all the records.  The weights will be updated.  The weights are the same for all of the accounts.  Continues to iterate to minimize the cost function.
+
+This process is called back propagation.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning14.JPG")
+```
+
+#### Gradient Descent
+
+Gradient Descent is a method the determine the optimal value of the weights in the neural net.  If you had only one variable, it would be easy.  A brute force attack could try 1000 weights to determine the minimal cost function:
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning15.JPG")
+```
+
+The brute force attach becomes unwieldy when have have more variables.  (Curse of dimensionality)
+
+Gradient Descent simply calculates the slope of the line; when the line has a negative slope, it moves to the right. If the line has  a positive slope, move to the left.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning16.JPG")
+```
+
+#### Stochastic Gradient Descent
+
+Gradient Descent requires the cost function to be convex - it has one global minimum.  A cost function might look like this (a different cost function or one in multi-dimensional space.)
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning17.JPG")
+```
+
+Recall above that every record was evaluated in the neural net, the cost function is calculated and the weights adjusted for the batch.
+
+In stochastic gradient descent, the weights are calculated for each record individually.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning18.JPG")
+knitr::include_graphics("./images/deeplearning19.JPG")
+```
+
+Major Differences:
+
+- Stochastic avoids local minimums - more likely to find the global minimum
+- Stochastic is faster - does not need to load all the data in memory
+- Batch Gradient Descent is deterministic algorithm.  Every time you run it, you will get the same results.  Stochastic is a stochastic - random - algo.  May not get the same result each time because you are picking rows at random.
+
+> There is another method that falls in between called the Mini Batch Gradient Descent where you define the number of records to run in batch and the the algo runs stochastically.
+
+### Training the Artificial Neural Network (ANN) with Stochastic Gradient Descent
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning20.JPG")
+```
+
+### Terms You Might Hear
+
+- Deep Belief Networks (DBNs):  A DBN is a type of deep neural network where multiple hidden layers and connections between (but not within) layers (a neuron in layer 1 may be connected to a neuron in layer
+2 but not connected to another neuron in layer 1).
+- Restricted Boltzmann Machine (RBM):  Is a type of DBN except a RBM typically has one input layer and one hidden layer. If several RBMs are stacked together, they form a DBN. The DBN can be trained as a series of RBMs. The first RBM layer is trained and used to transform raw data into hidden neurons which are then treated as a new set of inputs in a second RBM, and the process is repeated.
+- Recurrent Neural Network (RNN) where neurons send feedback signals to each other.
+- Convolutional Neural Network (CNN).  CNNs work by having each neuron respond to overlapping subregions of an image. CNNs are most commonly used in image recognition. 
+
+DBNs are sometimes used as a pre-training stage for a deep neural network. This allows the fast, greedy layer-by-layer training to be used to provide good initial estimates which are refined in the deep neural network using other slower training algorithms like back propagation.
+
+## R Packages
+
+- `nnet` fits feed-forward neural networks with one hidden layer
+- `neuralnet` also fits shallow neural networks with one hidden layer but can train them using back-propagation and allows custom error and neuron activation functions. 
+- `RSNNS` allows many types of models to fit in R. Common models are available using convenient wrappers, but the RSNNS package also makes many model components from SNNS available making it possible to train a wide variety of models.
+- `deepnet` provides a number of tools for deep learning in R. It can train RBMs and use these as part of DBNs to generate initial values to train deep neural networks. It allows for different activation functions and the use of dropout for regularization.
+- `darch`  stands for deep architectures. It can train RBMs and DBNs along with a variety of options related to each. `darch` is a pure R implementation model and training tends to be slow.
+- `H2O` provides an interface to the H2O software. H2O is written in Java and is fast and scalable. It provides not only deep learning and a variety of other popular machine learning algorithms.
+
+## `nnet`
+
+Because `nnet` is one of the models supported in `caret`, the example below leverages to consistent modeling interface in `caret` to explore a shal;low single layer neural network.
+
+```{r unloadAllPackages}
+lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""),detach,character.only=TRUE,unload=TRUE)
+```
+
