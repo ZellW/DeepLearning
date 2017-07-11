@@ -8,7 +8,7 @@ if(!require(easypackages)){
     install.packages("easypackages")
     library(easypackages)
 }
-packages("caret", "nnet", "h2o", prompt = FALSE)
+packages("caret", "nnet", prompt = FALSE)
 ```
 
 ## Introduction
@@ -169,13 +169,150 @@ DBNs are sometimes used as a pre-training stage for a deep neural network. This 
 
 ## `nnet`
 
-Because `nnet` is one of the models supported in `caret`, the example below leverages to consistent modeling interface in `caret` to explore a shal;low single layer neural network.
+Because `nnet` is one of the models supported in `caret`, the example below leverages to consistent modeling interface in `caret` to explore a shallow single layer neural network.
+
+### Get Data
+
+We will use the well-known [Kaggle Digit Recognizer data set](https://www.kaggle.com/c/digit-recognizer/data).
+
+The data files train.csv and test.csv contain gray-scale images of hand-drawn digits, from zero through nine.
+
+Each image is 28 pixels in height and 28 pixels in width, for a total of 784 pixels in total. Each pixel has a single pixel-value associated with it indicating the lightness or darkness of that pixel with higher numbers meaning darker. This pixel-value is an integer between 0 and 255, inclusive.
+
+The training data set, (train.csv), has 785 columns. The first column, called "label" is the digit that was drawn by the user. The rest of the columns contain the pixel-values of the associated image.
+
+Each pixel column in the training set has a name like pixelx, where x is an integer between 0 and 783, inclusive. To locate this pixel on the image, suppose that we have decomposed x as x = i * 28 + j, where i and j are integers between 0 and 27, inclusive. Then pixelx is located on row i and column j of a 28 x 28 matrix, (indexing by zero).
+
+```{r}
+digits.train <- read.csv("./data/train.csv")
+dim(digits.train)
+head(colnames(digits.train))
+tail(colnames(digits.train))
+head(digits.train[, 1:6])
+```
+
+Convert the labels (the digits 0 to 9) to a factor so R knows that this is a classification not a regression problem. If this were a real-world problem, we would want to use all 42,000 observations but for this exercise select the first 10,000 for these first examples of building and training a neural network. Separate the data into the features or predictors (digits.X) and the outcome (digits.Y). 
+
+```{r}
+## convert to factor 
+digits.train$label <- factor(digits.train$label, levels = 0:9) 
+i <- 1:10000 
+digits.X <- digits.train[i, -1] #Do not want to trian with the label - duh!
+digits.y <- digits.train[i, 1] 
+```
+
+It is always wise to check for the distribution of the label.  (If one digit occurs rarely, might need to adjust the modeling approach to ensure it is given enough weight in performance evaluation if we care about accurately predicting that digit.)
+
+```{r}
+barplot(table(digits.y))
+```
+Looks good!  OK to proceed.
+
+### Model Building
+
+Time to build and train using `nnet` through `caret`. 
+
+- `train()` takes the feature or predictor data, x, and the outcome variable, y.  
+- `train()` provides a simple way to tune the model using `tuneGrid`. It returns the performance measures for each set of tuning parameters and returns the best trained model. 
+     - `decay rate`, sometimes called the learning rate. This controls controls how much each iteration or step can influence the current weights. It is the regularization parameter to avoid over-fitting.
+     - `size` is the number of units in hidden layer (recall nnet fits a single hidden layer neural network)
+     - `trControl` controls additional aspects of train() and is used, when a variety of tuning parameters are being evaluated, to tell `caret` how to validate and pick the best tuning parameter. (Set the method for training control to "none" because there is only have one set of tuning parameters.) 
+     - `named arguments` are passed on to the `nnet()`. Because of the number of predictors (784), we increase the maximum number of weights to 10,000 and specify a maximum of 100 iterations. 
+
+```{r}
+set.seed(9876) 
+digits.m1 <- train(x = digits.X, y = digits.y, method = "nnet", 
+                   tuneGrid = expand.grid(.size = c(5), .decay = 0.1), 
+                   trControl = trainControl(method = "none"), MaxNWts = 10000, maxit = 100)
+```
+
+`predict()` generates a set of predictions for data. When called on the results of a model without specifying any new data, it just generates predictions on the same data used for training. After calculating and storing the predicted digits, examine their distribution. It is clear this model is not optimal.
+
+```{r}
+digits.yhat1 <- predict(digits.m1) 
+barplot(table(digits.yhat1))
+```
+
+A formal evaluation of model performance is performed using `confusionMatrix()` in `caret`.  The input is simply a frequency cross tab between the actual digits and the predicted digits. 
+
+> Because there is a function by the same name in the RSNNS package, use the caret:: code to tell R which version of the function to use.
+
+```{r}
+caret::confusionMatrix(xtabs(~digits.yhat1 + digits.y))
+```
+
+Recall:
+
+- sensitivity  =  TP/(TP + FN) - interpretation:  for digit 1 92.97% of 1 digits were correctly predicted to be 1
+- specificity = TN/(TN + FP) - interpretation:  The specificity for digit 1 can be interpreted as meaning that 99.20% of cases that were predicted to be a digit other than 1 were not 1. 
+-  balanced accuracy is the mean of the sensitivity and specificity
+
+Accuracy : 0.3947 - now that is a problem!  We must do better.
+
+Remeber every predictor or feature connects to each hidden neuron and each hidden neuron connects to each outcome or output. With 784 features, each additional hidden neuron adds a substantial number of parameters which  results in longer run times. These next models take time to finish.
+
+Increase size from 5 --> 10
+```{r eval=FALSE}
+set.seed(9876) 
+digits.m2 <- train(digits.X, digits.y, method = "nnet", 
+                   tuneGrid = expand.grid(.size = c(10), .decay = 0.1), 
+                   trControl = trainControl(method = "none"), MaxNWts = 50000, maxit = 100)
+digits.yhat2 <- predict(digits.m2) 
+barplot(table(digits.yhat2))
+caret::confusionMatrix(xtabs(~digits.yhat2 + digits.y))
+```
+
+The plot sure looks better.  Accuracy : 0.6341 is improved but still not good enough.  (Class 8 sensitivity is poor.)
+
+```{r eval=FALSE}
+set.seed(9876) 
+digits.m3 <- train(digits.X, digits.y, method = "nnet", 
+                   tuneGrid = expand.grid(.size = c(40), .decay = 0.1), 
+                   trControl = trainControl(method = "none"), MaxNWts = 50000, maxit = 100)
+digits.yhat3 <- predict(digits.m3) 
+barplot(table(digits.yhat3))
+caret::confusionMatrix(xtabs(~digits.yhat3 + digits.y))
+```
+
+Much improved - Accuracy : 0.8688!
+
+Could continue to refine with something like the one below.  There ar emany parameters that could be tried.
+
+```{r eval=FALSE}
+set.seed(9876) 
+nnetGrid <-  expand.grid(size = seq(from = 1, to = 10, by = 1),
+                        decay = seq(from = 0.1, to = 0.5, by = 0.1))
+
+digits.m3 <- train(digits.X, digits.y, method = "nnet", 
+              tuneGrid = nnetGrid,  trControl = trainControl(method = "none"), MaxNWts = 50000, maxit = 100)
+digits.yhat3 <- predict(digits.m3) 
+barplot(table(digits.yhat3))
+caret::confusionMatrix(xtabs(~digits.yhat3 + digits.y))
+```
+
+
+on page 32
+
 
 ```{r unloadAllPackages}
 lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE)
 ```
 
 ## Appendix
+
+### Brief caret Explanation
+
+The Caret package lets you train different models and tuning hyper-parameters using Cross Validation (Hold-Out or K-fold) or Bootstrap. 
+
+There are two different ways to tune the hyper-parameters using Caret: Grid Search and Random Search. If you use Grid Search (Brute Force) you need to define the grid for every parameter according to your prior knowledge or you can fix some parameters and iterate on the remain ones. If you use Random Search you need to specify a tuning length (maximum number of iterations) and Caret is going to use random values for hyper-parameters until the stop criteria holds. 
+
+No matter what method you choose Caret is going to use each combination of hyper-parameters to train the model and compute performance metrics as follows:
+
+1. Split the initial Training samples into two different sets: Training and Validation (For bootstrap or Cross validation) and into k sets (For k-fold Cross Validation).
+2. Train the model using the training set and to predict on validation set (For Cross Validation Hold-Out and Bootstrap). Or using k-1 training sets and to predict using the k-th training set (For K-fold Cross Validation).
+3. On the validation set Caret computes some performance metrics as ROC, Accuracy...
+4. Once the Grid Search has finished or the Tune Length is completed Caret uses the performance metrics to select the best model according to the criteria previously defined (You can use ROC, Accuracy, Sensibility, RSquared, RMSE....)
+5. You can create some plot to understand the resampling profile and to pick the best model (Keep in mind performance and complexity)
 
 ### H~2~O Install
 
