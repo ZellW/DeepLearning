@@ -290,8 +290,129 @@ barplot(table(digits.yhat3))
 caret::confusionMatrix(xtabs(~digits.yhat3 + digits.y))
 ```
 
+```{r unloadAllPackages, echo=FALSE}
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("RSNNS", "caret", prompt = FALSE)
+#Recreate the data
+digits.train <- read.csv("./data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9) 
+i <- 1:10000 
+digits.X <- digits.train[i, -1] #Do not want to trian with the label - duh!
+digits.y <- digits.train[i, 1]
+```
 
-on page 32
+### `RSNNS`
+
+`RSNNS` provides an interface to a variety of models using the Stuttgart Neural Network Simulator (SNNS) code. For a basic, singlehidden-layer, feed-forward neural network use `mlp()` which stands for **m**ulti-**l**ayer **p**erceptron. `RSNNS` is more finicky to use than the convenience of `nnet` via `caret` but one benefit is it can be far more flexible and allows for many other types of neural network architectures to be trained, including recurrent neural networks.  It also has a greater variety of learning functions. One difference between `nnet` and `RSNNS` is for multi-class outcomes (such as digits), 
+
+`RSNNS` requires a dummy coded matrix, so each possible class is represented as a column coded as 0/1. Provide this using `decodeClassLabels()`.
+
+```{r}
+head(decodeClassLabels(digits.y))
+```
+
+Had good success with 40 hidden neurons, so do the same size here. 
+
+> Because a matrix of outcomes is passed, although the predicted probability will not exceed 1 for any single digit, the sum of predicted probabilities across all digits may exceed 1 and also may be less than 1 (that is, for some cases, the model may not predict they are very likely to represent any of the digits). 
+
+We can get in-sample predictions but  we have to use another function, `fitted.values()`. Because this also returns a matrix where each column represents a single digit, use `encodeClassLabels()` to convert back into a single vector of digit labels to plotand evaluate model performance.
+
+```{r}
+set.seed(9876) 
+digits.m4 <- mlp(as.matrix(digits.X), decodeClassLabels(digits.y), size = 40, learnFunc = "Rprop", 
+                 shufflePatterns = FALSE, maxit = 60)
+digits.yhat4 <- fitted.values(digits.m4) 
+digits.yhat4 <- encodeClassLabels(digits.yhat4) 
+barplot(table(digits.yhat4))
+caret::confusionMatrix(xtabs(~ I(digits.yhat4 - 1) + digits.y))
+#Save this data for later use to avoid wating for the model to complete
+#CM_Data <- caret::confusionMatrix(xtabs(~ I(digits.yhat4 - 1) + digits.y))
+save(CM_Data, digits.yhat4, digits.m4, file="../Essentials/data/CM_Data.RData")
+```
+
+Evaluating model performance is the same as when using `nnet` and `caret`. However, when the output is encoded back into a single vector, the digits are labeled 1 to k, where k is the number of classes. Because the digits are 0 to 9, to make them match the original digit vector, we subtract 1. 
+
+Using the learning algorithms from `RSNNS`, we should have a higher performance with the same number of hidden neurons. (Need to review why this did not occur.  Might be a seed issue.)
+
+### From Probabilities to Discrete Classification
+
+For any given observation, there can be a probability of membership in any of a number of classes (for example, an observation may have a 40% chance of being a "5", a 20% chance of being a "6", and so on). For evaluating the performance of the model, some choices have to be made about how to go from the probability of class membership to a discrete classification. 
+
+#### Examine Some Options
+
+- Provided there are no ties, the simplest method is classify observations based on the high predicted probability. The RSNNS package calls this winner takes all (WTA). WTA selects the class with the highest probability provided there are no ties, the highest probability is above a user-defined threshold, and the remaining classes all have a predicted probability under the maximum minus another user-defined threshold. Otherwise, observations are classified as unknown. If both thresholds are zero (the default), this equates to saying that there must be one unique maximum. 
+     - The advantage of such an approach is that it provides quality control. In the digit classification example, there are 10 possible classes. Suppose nine of the digits had a predicted probability of 0.099, and the remaining class had a predicted probability of 0.109. Although one class is technically more likely than the others, the difference is fairly trivial and we may conclude that the model cannot with any certainty classify that observation. 
+- 402040 classifies if only one value is above a user-defined threshold, and all other values are below another user-defined threshold; if multiple values are above the first threshold, or any value is not below the second threshold, it treats the observation as unknown. The goal is to provide some quality control. 
+- Sometimes not all classes are equally important. For example, in a medical context where a variety of biomarkers and genes are collected on patients and used to classify whether they are healthy or not, at risk of cancer, or at risk of heart disease, even a 40% chance of having cancer may be enough to warrant further investigation, even if they have a 60% chance of being healthy. 
+      - Assess aspects such as sensitivity, specificity, and positive and negative predictive values. There are cases where overall accuracy is less important than making sure  no one is missed. 
+
+#### Probability to Discrete - Code Examples
+
+```{r getPreviousData, echo=FALSE}
+load("../Essentials/data/CM_Data.RData")
+```
+```{r}
+#fitted is a generic function which extracts fitted values from objects returned by modeling functions. fitted.values is an alias for it.
+digits.yhat4.insample <- fitted.values(digits.m4) 
+head(round(digits.yhat4.insample, 2))
+table(encodeClassLabels(digits.yhat4.insample, method = "WTA", l = 0, h = 0))
+```
+```{r}
+#l = 0, h = .5
+table(encodeClassLabels(digits.yhat4.insample, method = "WTA", l = 0.0, h = 0.5))
+#l = .2, h = .5
+table(encodeClassLabels(digits.yhat4.insample, method = "WTA", l = 0.0, h = 0.5))
+#l = 0.4, h = .6
+table(encodeClassLabels(digits.yhat4.insample, method = "WTA", l = 0.4, h = 0.6))
+#402040: l = .4, h = .6
+table(encodeClassLabels(digits.yhat4.insample, method = "402040", l = .4, h = .6))
+```
+
+Now generate predicted values for new data using the predict() function. Use the next 5,000 observations. 
+
+```{r}
+i2 <- 10001:15000 
+digits.yhat4.pred <- predict(digits.m4, as.matrix(digits.train[i2, -1]))
+table(encodeClassLabels(digits.yhat4.pred, method = "WTA", l = 0, h = 0))
+```
+
+Having generated predictions on out-of-sample data (data that was not used to train the model), proceed to examine problems related to overfitting the data and the impact on the evaluation of model performance. 
+
+## Over Fitting Data
+
+Overfitting occurs when a model fits noise in the training data. It appears to become more accurate as it accounts for the noise, but because the noise changes from one dataset to the next, accuracy does not apply to any data but the training data—it does not generalize.
+
+Overfitting can occur at any time but tends to become more severe as the ratio of parameters to information increases. Usually, this is can be thought of as the ratio of parameters to observations, but not always (for example, suppose the outcome is a rare event that occurs in 1 in 5 million people, a sample size of 15 million may still only have 3 people experiencing the event and would not support a complex model at all—information is low even though the sample size is large). To consider a simple but extreme case, imagine fitting a straight line to two data points. The fit will be perfect, and in those two training data your linear regression model will appear to have fully accounted for all variations in the data. However, if we then applied that line to another 1,000 cases, we might not expect it to fit very well at all. 
+
+Recall the accuracy of past models:
+
+Model 1:  Accuracy : 0.3947 
+Model 2:  Accuracy : 0.6341 
+Model 3:  Accuracy : 0.8688
+Model 4:  Accuracy : 0.7993 (RSNNS - poential seed issue - should be a bit higher that #3)
+
+Examine how the model generalizes by checking the accuracy on the out-of-sample predictions.  See it is still doing well, but the accuracy is reduced to 75.95% on the holdout data. Here there appears to have been approximately a 4% loss; or, put differently, using training data to evaluate model performance resulted in an overly optimistic estimate of the accuracy, and that overestimate was 4%:
+
+Model 4 on holdout data:  Accuracy : 0.7594 
+
+```{r}
+caret::confusionMatrix(xtabs(~digits.train[i2, 1] + I(encodeClassLabels(digits.yhat4.pred) - 1)))
+```
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning21.JPG")
+```
+See the code for this plot in the appendix
+
+
+
+on page 56
 
 
 ```{r unloadAllPackages}
@@ -359,5 +480,53 @@ myModel
 
 ```{r}
 h2o.shutdown(prompt = FALSE)
+```
+
+### Plot Code Comparing In Sample and Out Sample Model Performance
+
+```{r eval=FALSE}
+digits.yhat1.pred <- predict(digits.m1, digits.train[i2, -1])
+digits.yhat2.pred <- predict(digits.m2, digits.train[i2, -1])
+digits.yhat3.pred <- predict(digits.m3, digits.train[i2, -1])
+
+
+measures <- c("AccuracyNull", "Accuracy", "AccuracyLower", "AccuracyUpper")
+
+n5.insample <- caret::confusionMatrix(xtabs(~digits.y + digits.yhat1))
+n5.outsample <- caret::confusionMatrix(xtabs(~digits.train[i2, 1] + digits.yhat1.pred))
+
+n10.insample <- caret::confusionMatrix(xtabs(~digits.y + digits.yhat2))
+n10.outsample <- caret::confusionMatrix(xtabs(~digits.train[i2, 1] + digits.yhat2.pred))
+
+n40.insample <- caret::confusionMatrix(xtabs(~digits.y + digits.yhat3))
+n40.outsample <- caret::confusionMatrix(xtabs(~digits.train[i2, 1] + digits.yhat3.pred))
+
+n40b.insample <- caret::confusionMatrix(xtabs(~digits.y + I(digits.yhat4 - 1)))
+n40b.outsample <- caret::confusionMatrix(xtabs(~digits.train[i2, 1] +
+  I(encodeClassLabels(digits.yhat4.pred) - 1)))
+
+## results
+shrinkage <- rbind(
+  cbind(Size = 5, Sample = "In", as.data.frame(t(n5.insample$overall[measures]))),
+  cbind(Size = 5, Sample = "Out", as.data.frame(t(n5.outsample$overall[measures]))),
+  cbind(Size = 10, Sample = "In", as.data.frame(t(n10.insample$overall[measures]))),
+  cbind(Size = 10, Sample = "Out", as.data.frame(t(n10.outsample$overall[measures]))),
+  cbind(Size = 40, Sample = "In", as.data.frame(t(n40.insample$overall[measures]))),
+  cbind(Size = 40, Sample = "Out", as.data.frame(t(n40.outsample$overall[measures]))),
+  cbind(Size = 40, Sample = "In", as.data.frame(t(n40b.insample$overall[measures]))),
+  cbind(Size = 40, Sample = "Out", as.data.frame(t(n40b.outsample$overall[measures])))
+  )
+shrinkage$Pkg <- rep(c("nnet", "RSNNS"), c(6, 2))
+
+dodge <- position_dodge(width=0.4)
+
+p.shrinkage <- ggplot(shrinkage, aes(interaction(Size, Pkg, sep = " : "), Accuracy,
+                      ymin = AccuracyLower, ymax = AccuracyUpper,
+                      shape = Sample, linetype = Sample)) +
+  geom_point(size = 2.5, position = dodge) +
+  geom_errorbar(width = .25, position = dodge) +
+  xlab("") + ylab("Accuracy + 95% CI") +
+  theme_classic() +
+  theme(legend.key.size = unit(1, "cm"), legend.position = c(.8, .2))
 ```
 
