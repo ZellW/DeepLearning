@@ -1,0 +1,52 @@
+---
+title: "Introductory Machine Learning Using R Master"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    depth: 4
+    toc: yes
+    toc_float: yes
+    header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# Introduction and the Basics
+
+```{r child = 'DeepLearningPt1.Rmd'}
+rm(list=ls())
+```
+
+## Code Example - Walkthrough 1
+
+```{r child = 'DeepLearningPt2.Rmd'}
+rm(list=ls())
+```
+
+## OverFitting
+
+```{r child = 'DeepLearningPt3.Rmd'}
+rm(list=ls())
+```
+
+## Auto-Encoders
+
+```{r child = 'DeepLearningPt4.Rmd'}
+rm(list=ls())
+```
+
+## Deep Models for Prediction
+
+```{r child = 'DeepLearningPt5.Rmd'}
+rm(list=ls())
+```
+
+## Appendix
+
+```{r child = 'DeepLearningAppendix.Rmd'}
+rm(list=ls())
+```

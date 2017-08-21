@@ -1,0 +1,92 @@
+---
+title: "Deep Learning with R Part 4-2"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+### Walkthrough – Building an Auto-Encoder
+
+#### Get Data
+
+Just as the previous walkthru, we will again use the smartphone activity data used before.  This time we search for outliers using H~2~O.
+
+```{r prepNewPart3, message=FALSE, warning=FALSE}
+try(rm(list=ls()), silent = TRUE)
+try(lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE), silent = TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("caret", "h2o", prompt = FALSE)
+```
+
+```{r getDataWalkthru2 , eval=FALSE}
+use.train.x <- read.table("../Essentials/data/X_train.txt")
+use.train.y <- read.table("../Essentials/data/y_train.txt")[[1]]
+use.test.x <- read.table("../Essentials/data/X_test.txt")
+use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
+use.labels <- read.table("../Essentials/data/activity_labels.txt")
+
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+h2oactivity.train <- as.h2o(use.train.x, destination_frame = "h2oactivitytrain")
+h2oactivity.test <- as.h2o(use.test.x, destination_frame = "h2oactivitytest")
+
+save(use.test.x, use.test.y, use.train.x, use.train.y, h2oactivity.train, h2oactivity.test, use.labels, file="../Essentials/getDataWalkthru2.RData")
+```
+```{r echo=FALSE}
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+load("../Essentials/getDataWalkthru2.RData")
+```
+
+Use two layers with 100 hidden neurons each. No specific regularization used. Given that there are significantly fewer hidden neurons than there are input variables, the model simplicity may provide adequate regularization.
+
+```{r eval=FALSE}
+mu1 <- h2o.deeplearning(x = colnames(h2oactivity.train), training_frame= h2oactivity.train, 
+              validation_frame = h2oactivity.test, activation = "Tanh", autoencoder = TRUE, 
+              hidden = c(100, 100), epochs = 30, sparsity_beta = 0, input_dropout_ratio = 0, l1 = 0, l2 = 0)
+
+   save(mu1, file="../Essentials/mu1-2.RData")
+```
+```{r echo=FALSE}
+load("..//Essentials/mu1-2.RData")
+mu1
+```
+
+The model has a very low reconstruction error. suggesting the model is sufficiently complex to capture the key features of the data. There is no substantial difference in model performance between the training and validation data.
+
+Extract how anomalous each case is and plot the distribution. Clearly there are a few cases that are more anomalous than the rest shown by much higher error rates.
+
+```{r eval=FALSE}
+erroru1 <- as.data.frame(h2o.anomaly(mu1, h2oactivity.train))
+save(erroru1, file="../Essentials/erroru1.RData")
+```
+```{r}
+load("../Essentials/erroru1.RData")
+pue1 <- ggplot(erroru1, aes(Reconstruction.MSE)) +  geom_histogram(binwidth = .001, fill = "grey50") +
+  geom_vline(xintercept = quantile(erroru1[[1]], probs = .99), linetype = 2) + theme_bw()
+print(pue1)
+```
+
+One way to try to explore these anomalous cases further is to examine whether any of the activities tend to have more or less anomalous values. Do this by finding which cases are anomalous arbitrarily defined as the top 1% of error rates.  Extract the activities of those cases and plotting them. The majority of anomalous cases come from walking downstairs or lying down. With a high error in recreating the inputs, the deep features may be a (relatively) poor representation of the input for those cases. In practice if we were classifying based on these results, we might exclude these cases as they do not seem to fit the features the model has learned.
+
+```{r}
+i.anomolous <- erroru1$Reconstruction.MSE >= quantile(erroru1[[1]], probs = .99)
+
+pu.anomolous <- ggplot(as.data.frame(table(use.labels$V2[use.train.y[i.anomolous]])), aes(Var1, Freq)) + 
+     geom_bar(stat = "identity") + xlab("") + ylab("Frequency") + theme_classic() + 
+     theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+print(pu.anomolous)
+```
+
+**What we learned**:  Used a deep auto-encoder model to learn the features of actimetry data from smartphones. Useful for excluding unknown or unusual activities, rather than incorrectly classifying them. For example, as part of an app that classifies what activity you engaged in for how many minutes, it may be better to simply leave out a few minutes where the model is uncertain or the hidden features do not adequately reconstruct the inputs, rather than to aberrantly call an activity walking or sitting when it was actually walking downstairs. Such work can also help to identify where the model tends to have more issues. 
+
+Similarly, we could explore financial data or credit card usage patterns. Anomalous spending patterns may indicate fraud or that a credit card has been stolen. Rather than attempt to manually search through millions of credit card transactions, one could train an auto-encoder model and use it to identify anomalies for further investigation. 
+
+```{r echo=FALSE}
+h2o.shutdown(prompt = FALSE)
+```

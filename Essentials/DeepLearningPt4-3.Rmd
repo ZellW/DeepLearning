@@ -1,0 +1,104 @@
+---
+title: "Deep Learning with R Part 4-2"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+#### Optimize Auto-Encoder
+
+Vary the values of these parameters to obtain the best model. One dilemma is exacerbated when trying several models and choosing the best one is that, even if several models are equivalent, by chance in a given sample one may outperform the others. To combat this, we can use techniques such as cross-validation during training in order to optimize the parameter values while only using the training data, and then only this final model needs to be validated using the holdout or testing data. Currently, H2O does not support crossvalidation for auto-encoder models. To use cross-validation with H~2~O,  implement it manually. Use `createFolds()` from `caret`.
+
+This exercise reverts back to the handwriting MINST data set.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", prompt = FALSE)
+
+# data and H2O setup
+digits.train <- read.csv("../Essentials/data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9)
+
+cl <- makeCluster(2)
+cl <- h2o.init(max_mem_size = "6G", nthreads = 4)
+h2odigits <- as.h2o(digits.train, destination_frame = "h2odigits", h2o.no_progress())
+
+i <- 1:20000
+h2odigits.train <- h2odigits[i, -1]
+
+itest <- 20001:30000
+h2odigits.test <- h2odigits[itest, -1]
+
+xnames <- colnames(h2odigits.train)
+
+## create 5 folds
+set.seed(1234)
+folds <- createFolds(1:20000, k = 5)
+```
+
+Create a list of the hyperparameters for tuning. 
+
+```{r}
+## create parameters to try
+hyperparams <- list(list(hidden = c(50), input_dr = c(0), hidden_dr = c(0)), 
+                    list(hidden = c(200), input_dr = c(.2), hidden_dr = c(0)),
+                    list(hidden = c(400), input_dr = c(.2), hidden_dr = c(0)),
+                    list(hidden = c(400), input_dr = c(.2), hidden_dr = c(.5)),
+                    list(hidden = c(400, 200), input_dr = c(.2), hidden_dr = c(.25, .25)),
+                    list(hidden = c(400, 200), input_dr = c(.2), hidden_dr = c(.5, .25)))
+
+```
+
+Loop through the hyperparameters and 5-fold cross-validation to train all of the models. (Go get a cup of coffee - training 6 x 5 or 30 models some with hundreds of hidden neurons.)  Also note the use of `activation = "TanhWithDropout"` - it avoids the error previously witnessed.  (Need to go back and fix it!)
+
+```{r}
+# fm <- lapply(hyperparams, function(v) {
+#      lapply(folds, function(i) {
+#           h2o.deeplearning(x = xnames, training_frame = h2odigits.train[-i, ], validation_frame = h2odigits.train[i, ],
+#              activation = "TanhWithDropout", autoencoder = TRUE, hidden = v$hidden, epochs = 30, sparsity_beta = 0,
+#              input_dropout_ratio = v$input_dr, hidden_dropout_ratios = v$hidden_dr, l1 = 0, l2 = 0)
+#           })
+#      })
+fm <- readRDS("../Essentials/hyperparams.rds")
+
+fm.res <- lapply(fm, function(m) {sapply(m, h2o.mse, valid = TRUE) })
+
+fm.res <- data.table(Model = rep(paste0("M", 1:6), each = 5), MSE = unlist(fm.res))
+
+head(fm.res)
+
+p.erate <- ggplot(fm.res, aes(Model, MSE)) + geom_boxplot() + 
+     stat_summary(fun.y = mean, geom = "point", colour = "red") + theme_classic()
+print(p.erate)
+
+fm.res[, .(Mean_MSE = mean(MSE)), by = Model][order(Mean_MSE)]
+```
+```{r eval=FALSE}
+fm.final <- h2o.deeplearning(x = xnames, training_frame = h2odigits.train, 
+              validation_frame = h2odigits.test, 
+              activation = "TanhWithDropout", autoencoder = TRUE, hidden = hyperparams[[4]]$hidden, 
+              epochs = 30, sparsity_beta = 0, 
+              input_dropout_ratio = hyperparams[[4]]$input_dr, 
+              hidden_dropout_ratios = hyperparams[[4]]$hidden_dr, l1 = 0, l2 = 0)
+
+save(fm.final, file="../Essentials/fmfinal.RData")
+```
+
+```{r}
+load("../Essentials/fmfinal.RData")                             
+fm.final
+```
+```{r echo=FALSE}
+h2o.shutdown(prompt = FALSE)
+```
+
+MSE in our testing data is fairly close, though slightly worse than in the training data and is actually slightly less than the MSE estimated from cross-validation. To the extent that we searched over a reasonable set of hyperparameters, this model is now optimized, validated, and ready for use. 
+
+In practice, it is often difficult to balance the tradeoff between the possibility of obtaining better performance with a different model or different set of hyperparameters with the time it takes to run and train many different models. Sometimes it can be helpful to explore the optimal model using a random subset of all data, if the data is very large, in order to speed computation. 

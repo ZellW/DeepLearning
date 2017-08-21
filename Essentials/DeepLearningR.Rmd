@@ -1,6 +1,11 @@
 ---
 title: "Deep Learning with R"
-output: html_document
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
 ---
 
 ```{r echo=FALSE, warning=FALSE, message=FALSE}
@@ -11,7 +16,7 @@ if(!require(easypackages)){
 packages("caret", "nnet", prompt = FALSE)
 ```
 
-## Introduction
+## Deep Learning Introduction
 
 This document shows how to train and use deep learning models or deep neural networks in the R programming language and environment.  it will give you enough background to help you understand their basics and use 
 and interpret the results.
@@ -24,9 +29,7 @@ Machine learning is used to develop algorithms that learn from raw data in order
 knitr::include_graphics("./images/deeplearning1.JPG")
 ```
 
-### Introduction
-
-Deep Learning is the most exciting and powerful branch of Machine Learning. Deep Learning models can be used for a variety of complex tasks:
+Deep Learning is an exciting and powerful branch of Machine Learning. Deep Learning models can be used for a variety of complex tasks:
 
 - Artificial Neural Networks for Regression and Classification
 - Convolutional Neural Networks for Computer Vision
@@ -442,7 +445,6 @@ use.test.x <- read.table("../Essentials/data/X_test.txt")
 use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
 use.labels <- read.table("../Essentials/data/activity_labels.txt")
 barplot(table(use.train.y))
-
 ```
 
 Evaluate a variety of tuning parameters to experiment with different approaches to get the best model. Evaluate the models using different tuning parameters simultaneously
@@ -552,18 +554,1097 @@ performance.outsample[,-4]
 
 ####Walkthrough Conclusion
 
+```{r prepNewChapter2}
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("parallel", "foreach", "doSNOW", "glmnet", "MASS", "caret", "nnet", "deepnet", prompt = FALSE)
+```
+
+```{r}
+set.seed(1234)
+#mvrnorm requires MASS:  Produces one or more samples from the specified multivariate normal distribution.
+X <- mvrnorm(n = 200, mu = c(0, 0, 0, 0, 0),  Sigma = matrix(c(1, .9999, .99, .99, .10, .9999, 1, .99, .99, .10, .99, .99, 1, .99, .10, 
+                                                  .99, .99, .99, 1, .10, .10, .10, .10, .10, 1  ), ncol = 5))
+y <- rnorm(200, 3 + X %*% matrix(c(1, 1, 1, 1, 0)), .5)
+```
+
+
 Not only are the in-sample performance measures biased estimates of the models' actual out-of-sample performance, they do not even provide the best way to rank order model performance to choose the best performing model. 
 
 Despite the slightly worse out-of-sample performance, the models still do well—far better than chance alone—and, for our example use case, we could pick the best model (number 1) and be quite confident that using this will provide a good classification of a user's activities.
 
-on page 60
+## Overfitting
 
+Explore different approaches that can be used to prevent models from overfitting the data to improve generalizability, called regularization on unsupervised data. While models are trained by optimizing parameters in a way that reduces the training error, regularization is concerned with reducing testing or validation errors so  the model performs well with new data. 
 
+- L1 Penalty
+- L2 Penalty
+- Ensembles & Model Averaging
 
+### L1
 
-```{r unloadAllPackages}
-lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE)
+L1 penalty (Least Absolute Shrinkage and Selection Operator- lasso) is used to shrink weights towards zero. The penalty term uses the sum of the absolute weights so the degree of penalty is no smaller or larger for small or large weights, with the result that small weights may get shrunken to zero. The strength of the penalty is controlled by a hyperparameter, λ, which multiplies the sum of the absolute weights.  λ is treated as a hyperparameter and optimized by evaluating a range of possible λ values (for example, through cross validation).
+
+> If you only consider variables for which the L1 penalty leaves non zero weights, it can essentially function as feature selection, a primary motivation of another name commonly used for the L1 penalty, the Least Absolute Shrinkage and Selection Operator, or lasso. Even outside the usage of strict feature selection, the tendency for the L1 penalty to shrink small coefficients to zero can be convenient for simplifying the interpretation of the model results. 
+
+Data has been created based on samples from a multivariate noram distribution.
+
+Fit ordinary least squares regression model to the first 100 records and use the lasso. To use the lasso, use `glmnet()`. This can fit the L1 or the L2 penalties.  When alpha = 1, it is the L1 penalty (lasso).  When alpha = 0 it is the L2 penalty (ridge regression). Because we do not know the value of lambda we should pick, we can evaluate a range of options and tune this hyperparameter automatically using cross validation by using `cv.glmnet()`.
+
+```{r}
+m.ols <- lm(y[1:100] ~ X[1:100, ])
+m.lasso.cv <- cv.glmnet(X[1:100, ], y[1:100], alpha = 1) 
+plot(m.lasso.cv)
 ```
+
+When the penalty gets too high,  the cross-validated model error increases. lasso does well with low lambda values indicating lasso does not help improve out-of-sample performance/generalizability. We will continue but in actual use this might give us pause to consider whether the lasso was really helping.
+
+Compare the OLS coefficients with those from the lasso.
+
+```{r}
+cbind(OLS = coef(m.ols), Lasso = coef(m.lasso.cv)[,1])
+```
+
+The OLS coefficients are noisier.  lasso predictor 5 is penalized to 0. In the simulated data the true coefficients are 3, 1, 1, 1, 1, and 0. The OLS estimates have much too low a value for the first predictor and much too high a value for the second where the lasso has more accurate values for each. 
+
+### L2
+
+The L2 penalty (ridge regression) is similar L1 penalty.  Instead of adding a penalty based on the sum of the absolute weights, the penalty is based on the *squared weights*. This has the effect of providing a varied penalty, with larger (positive or negative) weights resulting in a greater penalty. In the context of neural networks, this is sometimes referred to as *weight decay*. Note below aplha = 0 to ridge regression.
+
+```{r}
+m.ridge.cv <- cv.glmnet(X[1:100, ], y[1:100], alpha = 0)
+plot(m.ridge.cv)
+```
+
+When the penalty gets too high the cross-validated model error increases. As with lasso, ridge regression model does well with low lambda values indicating L2 penalty does not much help improve out-of-sample performance/generalizability. 
+
+Compare the OLS coefficients with those from the lasso and the ridge regression model.
+
+```{r}
+cbind(OLS = coef(m.ols), Lasso = coef(m.lasso.cv)[,1],  Ridge = coef(m.ridge.cv)[,1])
+```
+
+Ridge regression does not shrink the coefficient for the fifth predictor to exactly zero. It is smaller than OLS and the remaining parameters are all slightly shrunken but close to their true values of 3, 1, 1, 1, 1, and 0. 
+
+### L2 in Neural Net
+
+```{r recreateData}
+#Recreate the data
+digits.train <- read.csv("./data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9) 
+i <- 1:5000 
+digits.X <- digits.train[i, -1] #Do not want to trian with the label - duh!
+digits.y <- digits.train[i, 1]
+
+## try various weight decays and number of iterations 
+## register backend so that different decays can be 
+## estimated in parallel 
+cl <- makeCluster(2) 
+registerDoSNOW(cl)
+```
+
+Train neural network on the digit classification; vary the weight decay penalty at 0 (no penalty) and 0.10; loop through two sets of the number of iterations allowed: 100 or 150.
+
+```{r}
+set.seed(1234) 
+digits.decay.m1 <- lapply(c(100, 150), function(its) {
+     train(digits.X, digits.y, method = "nnet", tuneGrid = expand.grid(.size = c(10), .decay = c(0, .1)), 
+           trControl = trainControl(method = "cv", number = 5, repeats = 1), MaxNWts = 10000, maxit = its)
+     })
+digits.decay.m1[[1]] 
+```
+
+When limited to 100 iterations, the nonregularized model (Accuracy = 0.63) outperforms the regularized model (Accuracy = 0.60) based on cross-validated results (although neither is doing well absolutely, particularly on this data):
+
+Examine the model with 150 iterations and see whether the regularized or non-regularized model performs better
+
+```{r}
+digits.decay.m1[[2]]
+```
+
+The model with more iterations outperforms the model with fewer iterations, regardless of the regularization. However, comparing both models with 150 iterations, the regularized model is superior (Accuracy = 0.66) to the non-regularized model (Accuracy = 0.65), although here the difference is relatively small. These results highlight the point that *regularization is often most helpful with more complex models that have greater flexibility to fit (and overfit) the data, and that (in models that are appropriate or overly simplistic for the data) regularization may actually decrease performance*.
+
+### Ensembles & Model Averaging
+
+As with the previous regularization methods, model averaging is a simple concept. If you have different models that each generate a set of predictions, each model may make errors in its predictions but they might not all make the same errors. Where one model predicts too high a value, another may predict one that's low. If averaged, some of the errors cancel out resulting in a more accurate prediction than would have been otherwise obtained.
+
+Consider a couple of different but extreme examples. 
+
+- Suppose that the models being averaged are identical or at least generate identical predictions (that is, perfectly correlated). Here, the average will result in no benefit. 
+- Suppose that the models being averaged each independently perform equally well and their predictions are uncorrelated (or have very low correlations). Then the average will be far more accurate as it gains the strengths of each model. 
+
+The following code gives an example using simulated data. In this small example, we have three models to illustrate the point concepts.
+
+```{r}
+set.seed(1234) 
+d <- data.frame(x = rnorm(400)) 
+d$y <- with(d, rnorm(400, 2 + ifelse(x < 0, x + x^2, x + x^2.5), 1)) 
+d.train <- d[1:200, ] 
+d.test <- d[201:400, ]
+
+## three different models 
+m1 <- lm(y ~ x, data = d.train) 
+m2 <- lm(y ~ I(x^2), data = d.train) 
+m3 <- lm(y ~ pmax(x, 0) + pmin(x, 0), data = d.train)
+
+## In sample R2 
+cbind(M1 = summary(m1)$r.squared, M2 = summary(m2)$r.squared, M3 = summary(m3)$r.squared)
+```
+
+The predictive value of each model, at least in the training data, varies quite a bit. Evaluating the correlations among fitted values in the training data can also help to indicate how much overlap there is among the model predictions.
+
+```{r}
+## correlations in the training data 
+cor(cbind(M1 = fitted(m1), M2 = fitted(m2), M3 = fitted(m3)))
+```
+
+Generate predicted values for the testing data, the average of the predicted values, and correlate the predictions.
+
+```{r}
+## generate predictions and the average prediction 
+d.test$yhat1 <- predict(m1, newdata = d.test) 
+d.test$yhat2 <- predict(m2, newdata = d.test) 
+d.test$yhat3 <- predict(m3, newdata = d.test) 
+d.test$yhatavg <- rowMeans(d.test[, paste0("yhat", 1:3)])
+
+## correlation in the testing data 
+cor(d.test)
+```
+
+The average of the three models' predictions performs better than any of the models individually. (0.907 > others y) However, this is only true when each model performs similarly well. Consider a pathological case where one model predicts the outcome perfectly and another is random noise that is completely uncorrelated with the outcome. In this case, averaging the two would certainly result in worse performance than just using the good model. It is good practice:
+
+1. Check the models being averaged have similar performance, at least in the training data. 
+2. Given models with similar performance, it is desirable to have lower correlations between model predictions, as this will result in the best performing average.
+
+### Ensemble Methods and Bagging
+
+Ensemble methods are methods that employ model averaging. One common technique is known as bootstrap aggregating, where the data is sampled with replacement to form equally sized datasets, a model is trained on each, and then these results are averaged. Because the data is sampled with replacement, some cases may show up multiple times or not at all in each dataset. Because a model is trained on each dataset, if a particular variation is unique to just a few cases or a rare quirk of the data, it may only emerge in one model; when the predictions are averaged across many models trained on each of the resampled datasets, such overfitting will tend to be reduced. This process is known as bagging (bootstrap aggregating). 
+
+Bagging and model averaging is not used as frequently in deep neural networks because the computational cost of training each model can be quite high and thus repeating the process many times becomes prohibitively expensive in terms of time and compute resources. 
+
+The dropout process serves a very similar function to the way many subset models are trained, by dropping specific neurons, and then the results of these models are averaged. 
+
+###  Out-of-Sample Performance with Dropout
+
+Dropout is simple in concept.   During the training of the model, units (inputs, hidden neurons) are probabilistically dropped along with all connections to and from them.  Dropout forces models to be more robust to perturbations. Although many neurons are included in the full model, during training they are not all simultaneously present, and so neurons must operate somewhat more independently than they would have to otherwise.
+
+Use `nn.train()` from  `deepnet` because it allows for dropout. 
+
+- Run the four models in parallel 
+- Compare four models, two with and two without dropout regularization and with either 40 or 80 hidden neurons. 
+- Specify the proportion to dropout separately for the hidden and visible units. Based on the rule of thumb that ~50% of hidden units (and 80% of observed units) should be kept, specify the dropout proportions at .5 and .2, respectively.
+
+```{r}
+lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE)
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("parallel", "foreach", "doSNOW", "caret", "nnet", "deepnet", "RSNNS", prompt = FALSE)
+```
+```{r}
+#Fit Models
+nn.models <- foreach(i = 1:4, .combine = 'c') %dopar% {
+     set.seed(1234) 
+     list(nn.train(x = as.matrix(digits.X), y = model.matrix(~ 0 + digits.y), hidden = c(40, 80, 40, 80)[i], activationfun = "tanh", 
+                   learningrate = 0.8, momentum = 0.5, numepochs = 150, output = "softmax", hidden_dropout = c(0, 0, .5, .5)[i], 
+                   visible_dropout = c(0, 0, .2, .2)[i]))
+     }
+```
+
+Loop through the models and obtain predicted values and get the overall model performance.
+
+```{r}
+nn.yhat <- lapply(nn.models, function(obj) {encodeClassLabels(nn.predict(obj, as.matrix(digits.X))) })
+perf.train <- do.call(cbind, lapply(nn.yhat, function(yhat) {caret::confusionMatrix(xtabs(~ I(yhat - 1) + digits.y))$overall })) 
+colnames(perf.train) <- c("N40", "N80", "N40_Reg", "N80_Reg")
+options(digits = 4) 
+perf.train
+```
+
+The 40-neuron model performs better with regularization than without it, but that the 80-neuron model performs better without regularization than with regularization. Of course the real test comes on the testing or hold out data.
+
+```{r}
+i2 <- 5001:10000 
+test.X <- digits.train[i2, -1] 
+test.y <- digits.train[i2, 1]
+nn.yhat.test <- lapply(nn.models, function(obj) {encodeClassLabels(nn.predict(obj, as.matrix(test.X))) })
+perf.test <- do.call(cbind, lapply(nn.yhat.test, function(yhat) {caret::confusionMatrix(xtabs(~ I(yhat - 1) + test.y))$overall })) 
+colnames(perf.test) <- c("N40", "N80", "N40_Reg", "N80_Reg")
+perf.test
+```
+
+The testing data highlights in the non-regularized model, the additional neurons do not meaningfully improve the performance of the model on the testing data. The in-sample performance was overly optimistic (Accuracy = 0.9546 versus Accuracy = 0.8684 for the 80-neuron, non-regularized model in training and testing data). We see the advantage of the regularized models for both the 40- and the 80-neuron models. Although both still perform worse in the testing data than they did in the training data, they perform better than the equivalent non-regularized models in the testing data. This difference is particularly important for the 80-neuron model as there is a 0.0862 drop in overall accuracy from training to testing data, but in the regularized model the drop is only 0.0382, resulting in the regularized 80-neuron model having the best overall performance. 
+
+This shows the value of using dropout, or regularization more generally, and how one might go about trying to tune the model and dropout parameters to improve the ultimate testing performance. 
+
+## Auto-Encoders
+
+```{r}
+## Fit Models 
+lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE)
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("parallel", "foreach", "doSNOW", "caret", "data.table", "h2o", prompt = FALSE)
+```
+
+Auto-encoders are neural networks.  What distinguishes auto-encoders from other forms of neural network is that auto-encoders are trained to reproduce or predict the inputs. The hidden layers and neurons are not maps between an input and some other outcome, but are self (auto)-encoding.  
+
+One way to use auto-encoders is to perform dimension reduction. Auto-encoders with a lower dimensionality than the raw data are called undercomplete; by using an undercomplete auto-encoder, one can force the auto-encoder to learn the most salient or prominent features of the data.  A common application of auto-encoders is to pre-train deep neural networks or other supervised learning models.
+
+Using an undercomplete model is effectively a way to regularize the model. However, it is also possible to train overcomplete auto-encoders where the hidden dimensionality is greater than the raw data, so long as some other form of regularization is used.
+
+### Train Auto-Encoder using H~2~O
+
+```{r}
+# data and H2O setup
+digits.train <- read.csv("../Essentials/data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9)
+
+cl <- h2o.init(max_mem_size = "6G", nthreads = 4)
+
+h2odigits <- as.h2o(digits.train, destination_frame = "h2odigits")
+
+i <- 1:20000
+h2odigits.train <- h2odigits[i, -1]
+
+itest <- 20001:30000
+h2odigits.test <- h2odigits[itest, -1]
+
+xnames <- colnames(h2odigits.train)
+```
+
+`h2o.deeplearning()`:
+
+- x, or input, variable names. 
+- activation function to use here: "Tanh"
+- autoencoder = TRUE argument, the model is an auto-encoder model, rather than a regular model, so that no y or outcome variable(s) need to be specified
+- start with a single layer (shallow) of hidden neurons, with 50 hidden neurons. 
+- 20 training iterations, called epochs. 
+- remaining arguments just specify not to use any form of regularization for this model. Regularization is not needed as there are hundreds of input variables and only 50 hidden neurons, so the relative simplicity of the model provides all the needed regularization
+
+Note: Have to comment out `hidden_dropout_ratios = c(0)`.  Otherwise preseted with this error:
+
+<span style="color:red">Details: ERRR on field: _hidden_dropout_ratios: Cannot specify hidden_dropout_ratios with a non-dropout activation function. Use 'RectifierWithDropout', 'TanhWithDropout', etc.</span>
+
+```{r}
+m1 <- h2o.deeplearning(
+  x = xnames,
+  training_frame= h2odigits.train,
+  validation_frame = h2odigits.test,
+  activation = "Tanh",
+  autoencoder = TRUE,
+  hidden = c(50),
+  epochs = 20,
+  sparsity_beta = 0,
+  input_dropout_ratio = 0,
+  #hidden_dropout_ratios = c(0),
+  l1 = 0,
+  l2 = 0
+)
+```
+
+The remaining models are similar to the first model, m1, but adjust the complexity of the model by increasing the number of hidden neurons and adding regularization. 
+
+- m2a has no regularization, but increases the number of hidden neurons to 100. 
+- m2b uses 100 hidden neurons and also a sparsity beta of .5. 
+- m2c uses 100 hidden neurons and a 20% dropout of the inputs (the x variables), which results in a form of corrupted inputs.  m2c is a form of denoising auto-encoder
+
+```{r}
+m2a <- h2o.deeplearning(
+  x = xnames,
+  training_frame= h2odigits.train,
+  validation_frame = h2odigits.test,
+  activation = "Tanh",
+  autoencoder = TRUE,
+  hidden = c(100),
+  epochs = 20,
+  sparsity_beta = 0,
+  input_dropout_ratio = 0,
+  #hidden_dropout_ratios = c(0),
+  l1 = 0,
+  l2 = 0
+)
+
+m2b <- h2o.deeplearning(
+  x = xnames,
+  training_frame= h2odigits.train,
+  validation_frame = h2odigits.test,
+  activation = "Tanh",
+  autoencoder = TRUE,
+  hidden = c(100),
+  epochs = 20,
+  sparsity_beta = .5,
+  input_dropout_ratio = 0,
+  #hidden_dropout_ratios = c(0),
+  l1 = 0,
+  l2 = 0
+)
+
+m2c <- h2o.deeplearning(
+  x = xnames,
+  training_frame= h2odigits.train,
+  validation_frame = h2odigits.test,
+  activation = "Tanh",
+  autoencoder = TRUE,
+  hidden = c(100),
+  epochs = 20,
+  sparsity_beta = 0,
+  input_dropout_ratio = .2,
+  #hidden_dropout_ratios = c(0),
+  l1 = 0,
+  l2 = 0
+)
+```
+
+Below, for each model the following output shows the performance as the mean squared error (MSE) in the training and validation data. A zero MSE indicates a perfect fit with higher values indicating deviations between g(f(x)) and x. 
+
+- m1, the MSE is fairly low and identical in the training and validation data. This may be in part due to how relatively simple the model is (50 hidden neurons and 20 epochs, when there are hundreds of input variables). 
+- m2a there is about a 45% reduction in the MSE, although both are low. However, with the greater model complexity, a slight difference between the training and validation metrics is observed. 
+- Similar results are noted in model m2b. Despite the fact that the validation metrics did not improve with regularization, the training metrics were closer to the validation metrics, suggesting the performance of the regularized training data generalizes better. 
+- m2c the 20% input dropout without additional model complexity results in poorer performance in both the training and validation data. Our initial model with 100 hidden neurons is too simple still to really need much regularization:
+
+```{r}
+m1
+m2a
+m2b
+m2c
+```
+
+Another way we can look at the model results is to calculate how anomalous each case is. This can be done using the h2o.anomaly() function. The results are converted to data frames, labeled, and joined together in one final data table object called error:
+
+```{r}
+error1 <- as.data.frame(h2o.anomaly(m1, h2odigits.train)) 
+error2a <- as.data.frame(h2o.anomaly(m2a, h2odigits.train)) 
+error2b <- as.data.frame(h2o.anomaly(m2b, h2odigits.train)) 
+error2c <- as.data.frame(h2o.anomaly(m2c, h2odigits.train))
+
+error <- as.data.table(rbind(cbind.data.frame(Model = 1, error1),  cbind.data.frame(Model = "2a", error2a),  
+                               cbind.data.frame(Model = "2b", error2b),  cbind.data.frame(Model = "2c", error2c)))
+```
+
+use `data.table` to create a new data object, percentile, that contains the 99th percentile for each model
+```{r}
+percentile <- error[, .(Percentile = quantile(Reconstruction.MSE, probs = .99) ), by = Model] 
+```
+
+Combining the information on how anomalous each case is and the 99th percentile, both by model, use `ggplot2` to plot results. The histograms show the error rates for each case and the dashed line is the 99th percentile. Any value beyond the 99th percentile may be considered fairly extreme or anomalous.
+
+```{r}
+p <- ggplot(error, aes(Reconstruction.MSE)) +  geom_histogram(binwidth = .001, fill = "grey50") + 
+     geom_vline(aes(xintercept = Percentile), data = percentile, linetype = 2) +  
+     theme_bw() +  facet_wrap(~Model) 
+print(p)
+```
+
+If we merge the data in wide form, with the anomaly values for each model in separate columns rather than in one long column with another indicating the model, we can plot the anomalous values against each other. 
+
+```{r}
+error.tmp <- cbind(error1, error2a, error2b, error2c) 
+colnames(error.tmp) <- c("M1", "M2a", "M2b", "M2c") 
+plot(error.tmp)
+```
+
+Another way we can examine the model results is to extract the deep features from the model. Deep features (layer by layer) can be extracted using the `h2o.deepfeatures()`. The deep features are the values for the hidden neurons in the model. One way to explore these features is to correlate them and examine the distribution of correlations using `ggplot2`.  The deep features have small correlations, r, with an absolute value < .20, with only very few having |r| > .20.
+
+```{r}
+features1 <- as.data.frame(h2o.deepfeatures(m1, h2odigits.train)) 
+r.features1 <- cor(features1) 
+r.features1 <- data.frame(r = r.features1[upper.tri(r.features1)])
+
+p.hist <- ggplot(r.features1, aes(r)) +  geom_histogram(binwidth = .02) +  theme_classic() 
+print(p.hist)
+```
+
+The examples so far show how auto-encoders can be trained but have only represented shallow auto-encoders with a single hidden layer. 
+
+Given that we know the MNIST dataset consists of 10 different handwritten digits, perhaps try adding a second layer of hidden neurons with only 10 neurons, supposing when the model learns the features of the data, 10 prominent features may correspond to the 10 digits.
+
+To add this second layer of hidden neurons, we pass a vector, c(100, 10), to the hidden argument and update the hidden_dropout_ratios argument because a different dropout ratio can be used for each hidden layer'
+
+```{r}
+m3 <- h2o.deeplearning(x = xnames, training_frame= h2odigits.train, validation_frame = h2odigits.test,  
+                       activation = "Tanh",  autoencoder = TRUE,  hidden = c(100, 10),  epochs = 30,  
+                       sparsity_beta = 0,  input_dropout_ratio = 0,  l1 = 0,  l2 = 0 )
+```
+
+Extract the values for the hidden neurons using `h2o.deepfeatures()`specifying the values for layer 2. The first six rows of these features are shown next.
+
+```{r}
+features3 <- as.data.frame(h2o.deepfeatures(m3, h2odigits.train, 2)) 
+head(features3)
+```
+
+Because there are no outcomes being predicted, these values are continuous and are not probabilities of there being a particular digit but just values on 10 continuous hidden neurons. 
+
+Next add in the actual digit labels from the training data and use `melt()` to reshape the data into a long dataset. Plot the means on each of the 10 hidden layers by which digit a case actually belongs to. If the 10 hidden features roughly correspond to the 10 digit labels, for particular labels (for example, 0, 3, etc.) they should have an extreme value on one deep feature, indicating the correspondence between a deep feature and the actual digits.
+
+```{r}
+features3$label <- digits.train$label[i] 
+features3 <- melt(features3, id.vars = "label")
+p.line <- ggplot(features3, aes(as.numeric(variable), value, colour = label, linetype = label)) +  
+     stat_summary(fun.y = mean, geom = "line") +  scale_x_continuous("Deep Features", breaks = 1:10) +  
+     theme_classic() +  theme(legend.position = "bottom", legend.key.width = unit(1, "cm")) 
+print(p.line)
+```
+
+Although there does seem to be some correspondence (for example, zeros are particularly high on deep features 4 and 7), in general the results are quite noisy without particularly clear indication of a high degree of separation between deep features and the actual digit labels. 
+
+Take a look at the performance metrics for the model. With an MSE of about 0.039, the model fits substantially worse than did the shallow model, probably because having only 10 hidden neurons for the second layer is too simplistic to capture all the different features of the data needed to reproduce the original inputs.
+
+```{r}
+m3
+```
+
+### Walkthrough – Building an Auto-Encoder
+
+#### Get Data
+
+Just as the previous walkthru, we will again use the smartphone activity data used before.  This time we search for outliers using H~2~O.
+
+```{r prepNewPart3}
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("caret", "h2o", prompt = FALSE)
+```
+
+```{r getDataWalkthru2}
+use.train.x <- read.table("../Essentials/data/X_train.txt")
+use.train.y <- read.table("../Essentials/data/y_train.txt")[[1]]
+use.test.x <- read.table("../Essentials/data/X_test.txt")
+use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
+use.labels <- read.table("../Essentials/data/activity_labels.txt")
+
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+h2oactivity.train <- as.h2o(use.train.x, destination_frame = "h2oactivitytrain")
+h2oactivity.test <- as.h2o(use.test.x, destination_frame = "h2oactivitytest")
+###################
+
+```
+
+Use two layers with 100 hidden neurons each. No specific regularization used. Given that there are significantly fewer hidden neurons than there are input variables, the model simplicity may provide adequate regularization.
+
+```{r}
+mu1 <- h2o.deeplearning(x = colnames(h2oactivity.train), training_frame= h2oactivity.train, validation_frame = h2oactivity.test,
+                        activation = "Tanh", autoencoder = TRUE, hidden = c(100, 100), epochs = 30, sparsity_beta = 0,
+                        input_dropout_ratio = 0, l1 = 0, l2 = 0)
+mu1
+```
+
+The model has a very low reconstruction error. suggesting the model is sufficiently complex to capture the key features of the data. There is no substantial difference in model performance between the training and validation data.
+
+Extract how anomalous each case is and plot the distribution. Clearly there are a few cases that are more anomalous than the rest shown by much higher error rates.
+
+```{r}
+erroru1 <- as.data.frame(h2o.anomaly(mu1, h2oactivity.train))
+
+pue1 <- ggplot(erroru1, aes(Reconstruction.MSE)) +
+  geom_histogram(binwidth = .001, fill = "grey50") +
+  geom_vline(xintercept = quantile(erroru1[[1]], probs = .99), linetype = 2) +
+  theme_bw()
+print(pue1)
+```
+
+One way to try to explore these anomalous cases further is to examine whether any of the activities tend to have more or less anomalous values. Do this by finding which cases are anomalous arbitrarily defined as the top 1% of error rates.  Extract the activities of those cases and plotting them. The majority of anomalous cases come from walking downstairs or lying down. With a high error in recreating the inputs, the deep features may be a (relatively) poor representation of the input for those cases. In practice if we were classifying based on these results, we might exclude these cases as they do not seem to fit the features the model has learned.
+
+```{r}
+i.anomolous <- erroru1$Reconstruction.MSE >= quantile(erroru1[[1]], probs = .99)
+
+pu.anomolous <- ggplot(as.data.frame(table(use.labels$V2[use.train.y[i.anomolous]])), aes(Var1, Freq)) + geom_bar(stat = "identity") +
+     xlab("") + ylab("Frequency") + theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+print(pu.anomolous)
+```
+
+**What we learned**:  Used a deep auto-encoder model to learn the features of actimetry data from smartphones. Useful for excluding unknown or unusual activities, rather than incorrectly classifying them. For example, as part of an app that classifies what activity you engaged in for how many minutes, it may be better to simply leave out a few minutes where the model is uncertain or the hidden features do not adequately reconstruct the inputs, rather than to aberrantly call an activity walking or sitting when it was actually walking downstairs. Such work can also help to identify where the model tends to have more issues. 
+
+Similarly, we could explore financial data or credit card usage patterns. Anomalous spending patterns may indicate fraud or that a credit card has been stolen. Rather than attempt to manually search through millions of credit card transactions, one could train an auto-encoder model and use it to identify anomalies for further investigation. 
+
+#### Optimize Auto-Encoder
+
+Vary the values of these parameters to obtain the best model. One dilemma is exacerbated when trying several models and choosing the best one is that, even if several models are equivalent, by chance in a given sample one may outperform the others. To combat this, we can use techniques such as cross-validation during training in order to optimize the parameter values while only using the training data, and then only this final model needs to be validated using the holdout or testing data. Currently, H2O does not support crossvalidation for auto-encoder models. To use cross-validation with H~2~O,  implement it manually. Use `createFolds()` from `caret`.
+
+This exercise reverts back to the handwriting MINST data set.
+
+```{r echo=FALSE}
+h2o.shutdown(prompt = FALSE)
+rm(list=ls())
+
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", prompt = FALSE)
+
+# data and H2O setup
+digits.train <- read.csv("../Essentials/data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9)
+
+cl <- makeCluster(2)
+
+cl <- h2o.init(max_mem_size = "6G", nthreads = 4)
+
+h2odigits <- as.h2o(digits.train, destination_frame = "h2odigits")
+
+i <- 1:20000
+h2odigits.train <- h2odigits[i, -1]
+
+itest <- 20001:30000
+h2odigits.test <- h2odigits[itest, -1]
+
+xnames <- colnames(h2odigits.train)
+```
+
+
+```{r}
+## create 5 folds
+set.seed(1234)
+folds <- createFolds(1:20000, k = 5)
+```
+
+Create a list of the hyperparameters for tuning. 
+
+```{r}
+## create parameters to try
+hyperparams <- list(list(hidden = c(50), input_dr = c(0), hidden_dr = c(0)), 
+                    list(hidden = c(200), input_dr = c(.2), hidden_dr = c(0)),
+                    list(hidden = c(400), input_dr = c(.2), hidden_dr = c(0)),
+                    list(hidden = c(400), input_dr = c(.2), hidden_dr = c(.5)),
+                    list(hidden = c(400, 200), input_dr = c(.2), hidden_dr = c(.25, .25)),
+                    list(hidden = c(400, 200), input_dr = c(.2), hidden_dr = c(.5, .25)))
+
+```
+
+Loop through the hyperparameters and 5-fold cross-validation to train all of the models. (Go get a cup of coffee - training 6 x 5 or 30 models some with hundreds of hidden neurons.)  Also note the use of `activation = "TanhWithDropout"` - it avoids the error previously witnessed.  (Need to go back and fix it!)
+
+```{r}
+# fm <- lapply(hyperparams, function(v) {
+#      lapply(folds, function(i) {
+#           h2o.deeplearning(x = xnames, training_frame = h2odigits.train[-i, ], validation_frame = h2odigits.train[i, ],
+#                            activation = "TanhWithDropout", autoencoder = TRUE, hidden = v$hidden, epochs = 30, sparsity_beta = 0,
+#                            input_dropout_ratio = v$input_dr, hidden_dropout_ratios = v$hidden_dr, l1 = 0, l2 = 0)
+#           })
+#      })
+fm <- readRDS("../Essentials/hyperparams.rds")
+```
+
+
+
+```{r}
+fm.res <- lapply(fm, function(m) {sapply(m, h2o.mse, valid = TRUE) })
+
+fm.res <- data.table(Model = rep(paste0("M", 1:6), each = 5), MSE = unlist(fm.res))
+
+head(fm.res)
+
+p.erate <- ggplot(fm.res, aes(Model, MSE)) + geom_boxplot() + stat_summary(fun.y = mean, geom = "point", colour = "red") + 
+     theme_classic()
+print(p.erate)
+
+fm.res[, .(Mean_MSE = mean(MSE)), by = Model][order(Mean_MSE)]
+
+fm.final <- h2o.deeplearning(x = xnames, training_frame = h2odigits.train, validation_frame = h2odigits.test, 
+                             activation = "TanhWithDropout", autoencoder = TRUE, hidden = hyperparams[[4]]$hidden, 
+                             epochs = 30, sparsity_beta = 0, 
+                             input_dropout_ratio = hyperparams[[4]]$input_dr, 
+                             hidden_dropout_ratios = hyperparams[[4]]$hidden_dr, 
+                             l1 = 0, l2 = 0)
+fm.final
+h2o.shutdown(prompt = FALSE)
+```
+
+MSE in our testing data is fairly close, though slightly worse than in the training data and is actually slightly less than the MSE estimated from cross-validation. To the extent that we searched over a reasonable set of hyperparameters, this model is now optimized, validated, and ready for use. 
+
+In practice, it is often difficult to balance the tradeoff between the possibility of obtaining better performance with a different model or different set of hyperparameters with the time it takes to run and train many different models. Sometimes it can be helpful to explore the optimal model using a random subset of all data, if the data is very large, in order to speed computation. 
+
+## Deep Prediction Models
+
+Two common applications of auto-encoders and unsupervised learning are to identify anomalous data and to pre-train more complex models such as deep neural networks. Now train and build deep neural networks to develop prediction models (supervised learning).
+
+- Deep feedforward neural networks
+- Common activation functions: rectifiers, hyperbolic tangent, and maxout
+- Picking hyperparameters
+- Training and predicting new data from a deep neural network
+- Walkthrough:  training a deep neural network for automatic classification
+
+### Feedforward Neural Networks
+
+A deep feedforward neural network is designed to approximate a function, f(), that maps some set of input variables, x, to an output variable, y. They are called feedforward neural networks because information flows from the inputs through each successive layer as far as the output and there are no feedback or recursive loops (models including both forward and backward connections are referred to as recurrent neural networks). 
+
+Deep feedforward neural networks are applicable to a wide range of problems and are particularly useful for applications such as image classification. More generally, feedforward neural networks are useful for prediction and classification where there is a clearly defined outcome (what digit an image contains, whether someone is walking upstairs or walking on a flat surface, the presence/absence of disease, and so on). In these cases, there is no need for a feedback loop. Recurrent networks are useful for cases where feedback loops are important, such as for natural language processing.
+
+A different function is learned for each successive layer. If sufficient hidden neurons are included in a layer, it can approximate to the desired degree of precision with many different types of functions. Even if the mapping from the final hidden layer to the outcome is a linear mapping with learned weights, feedforward neural networks can approximate nonlinear functions, by first applying non-linear transformations from the input layer to the hidden layer. *This is one of the key strengths of deep learning*. In linear regression, for example, the model learns the weights from the inputs to the outcome. However, the functional form must be specified. In deep feedforward neural networks, the transformations from the input layer to the hidden layer are learned as well as the weights from the hidden layer to the outcome. The model learns the functional form as well as the weights. The more hidden neurons, the closer the approximation. Thus for practical purposes, the model learns the functional form.
+
+### Common Activation Functions
+
+- rectifiers
+- hyperbolic tangent
+- maxout
+
+The activation function determines the mapping between inputs and a hidden layer. It defines the functional form for how a neuron gets activated. 
+
+- linear activation function could be defined as: f(x) = x, in which case the value for the neuron would be the raw input, x, times the learned weight, a linear model. The problem with making activation functions linear is that this does not permit any non-linear functional forms to be learned. 
+- Previously, we  used the hyperbolic tangent as an activation function, so f(x) = tanh(x). The hyperbolic tangent can work well in some cases, but a potential limitation is that, at either low or high values, it saturates
+- Perhaps the most popular activation function currently, and a good first choice is known as a rectifier. There can be different kinds of rectifiers but, most commonly, linear rectifiers are used and are defined by the function f(x) = max(0, x). Linear rectifiers are flat below some threshold and are then linear.  Despite their simplicity, linear rectifiers provide a non-linear transformation, and enough linear rectifiers can be used to approximate arbitrary non-linear functions, unlike using only linear activation functions. 
+- A final type of activation function is maxout. A maxout unit takes the maximum value of its inputs, although as usual this is after weighting so it is not the case that the input variable with the highest value will always win. Maxout activation functions seem to work particularly well with dropout.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning22.JPG")
+```
+
+### Picking Hyperparameters
+
+The parameters of a model typically refer to things such as the weights or bias/ intercept parameters. However, there are many other parameters that must be set at the offset and are not optimized or learned during model training. These are sometimes referred to as hyperparameters. Even the choice of model (for example, deep feedforward neural network, random forest, or support vector machine) can be seen as a hyperparameter. 
+
+Even if we assume a deep feedforward neural network is the best modeling strategy, there are still many hyperparameters that must be set. These hyperparameters may be explicitly specified by the user or implicitly specified by using default values, where software provides them. The values chosen for the hyperparameters can have a dramatic impact on the accuracy and training speed of a model. We have already seen examples of trying different hyperparameters, such as trying different numbers of hidden neurons in a layer or a different number of layers. However, other hyperparameters also impact performance and speed. For example, in the following code, we set up the R environment, load the Modified National Institute of Standards and Technology (MNIST) data (images of handwritten digits) we have worked with, and run two prediction models, only varying the learning rate:
+
+For example, the higher learning rate is faster but sacrifices performance. Because there are many hyperparameters, the decision about one is not made in isolation from the rest. One example of this is regularization. Often, relatively larger or more complex models are used with many hidden neurons and possibly multiple layers, choices that will tend to increase accuracy (at least within the training data) and reduce speed. However, these complex models often include some form of regularization, such as dropout, which would tend to reduce accuracy (at least within the training data) and improve speed as only a subset of neurons are included in any given iteration. 
+
+Decisions must be made as to how many layers there should be, how many hidden neurons should be in each layer, whether there should be any skipping patterns or each layer should only have sequential connections. Unfortunately, there are no simple rules to follow to resolve many of these questions. Experience matters (as does patience workin through many experiments.)
+
+Understanding what each hyperparameter helps to inform your decisions. If you start with a model and its performance is worse than is acceptable hyperparameters should be changed to allow greater capacity and flexibility in the model, for example, adding more hidden neurons, additional layers of hidden neurons, more training epochs, etc. If there is a large difference between the model's performance on the training data and testing data, this may suggest the model is overfitting the data, in which case hyperparameters may be tweaked to reduce capacity or add more regularization. 
+
+### Training & Predicting Using Deep Neural Network
+
+Get data that we have used before.
+
+```{r echo=FALSE}
+rm(list=ls())
+
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", prompt = FALSE)
+
+# data and H2O setup
+use.train.x <- read.table("../Essentials/data/X_train.txt")
+use.train.y <- read.table("../Essentials/data/y_train.txt")[[1]]
+use.test.x <- read.table("../Essentials/data/X_test.txt")
+use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
+
+use.train <- cbind(use.train.x, Outcome = factor(use.train.y)) 
+use.test <- cbind(use.test.x, Outcome = factor(use.test.y))
+
+use.labels <- read.table("../Essentials/data/activity_labels.txt")
+
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+h2oactivity.train <- as.h2o(use.train, destination_frame = "h2oactivitytrain")
+h2oactivity.test <- as.h2o(use.test, destination_frame = "h2oactivitytest")
+```
+
+Already learned the components of training a deep prediction model. Previously used `h2o.deeplearning()` for the auto-encoder models.  Below, specify the variable names for both the x and y arguments. 
+
+- Activation function used is a linear rectifier
+     - dropout both on the input variables (20%) and the hidden neurons (50%).
+- Shallow network with only 50 hidden neurons and 10 training iterations. 
+- Cost (loss) function is cross-entropy
+
+The model includes a total of 28,406 weights/biases. Biases are like intercepts or constant offsets. Because this is a feedforward neural network, there are only weights between adjacent layers. Input variables do not have biases, but hidden neurons and outcomes do. The 28,406 weights are made up from 561 x 50 = 28,050 weights between the input variables and the first layer of hidden neurons, 50 x 6 = 300 weights between the hidden neurons and the outcome (6 because there are different levels of the outcome), 50 biases for the hidden neurons, and 6 biases for the outcome.
+
+Output also shows the number of layers and the number of units in each layer, the type of each unit, the dropout percentage, and other regularization and hyperparameter information.
+
+At the ned, a confusion matrix is printed which shows the actual outcome against the predicted outcome. The observed outcome is shown on the rows and the predicted outcome is shown on the columns. The diagonal indicates correct classification and the error rate by outcome level is shown.
+
+```{r}
+mt1 <- h2o.deeplearning(  x = colnames(use.train.x),  y = "Outcome",  training_frame= h2oactivity.train,  
+                          activation = "RectifierWithDropout",  hidden = c(50),  epochs = 10,  loss = "CrossEntropy",  
+                          input_dropout_ratio = .2,  hidden_dropout_ratios = c(.5), ,  export_weights_and_biases = TRUE ) 
+mt1
+```
+
+
+Extract and look at the features of the model using `h2o.deepfeatures()` specifying the model, data, and layer. The code extracts features and looks at the first few rows. The outcome is also included by default. Note the zeros in the features; these are there because we used a linear rectifier so values below zero are censored at zero.
+
+```{r}
+f <- as.data.frame(h2o.deepfeatures(mt1, h2oactivity.train, 1))
+f[1:10, 1:5]
+```
+
+Extract weights from each layer. The following code extracts weights and makes a heatmap so we can see if there are any clear patterns of certain input variables having higher weights to particular hidden neurons.  There does not seem to be any particularly clear pattern . . . .
+
+```{r}
+w1 <- as.matrix(h2o.weights(mt1, 1))
+## plot heatmap of the weights 
+tmp <- as.data.frame(t(w1)) 
+tmp$Row <- 1:nrow(tmp) 
+tmp <- melt(tmp, id.vars = c("Row"))
+p.heat <- ggplot(tmp, aes(variable, Row, fill = value)) +  geom_tile() +  scale_fill_gradientn(colours = c("black", "white", "blue")) +  
+     theme_classic() +  theme(axis.text = element_blank()) +  xlab("Hidden Neuron") +  ylab("Input Variable") +  
+     ggtitle("Heatmap of Weights for Layer 1") 
+print(p.heat)
+```
+
+Now predict using the model aboce using `h2o.predict()`:
+
+```{r}
+yhat.h2o <- as.data.frame(h2o.predict(mt1, newdata = h2oactivity.train))
+head(yhat.h2o)
+```
+
+### Walkthrough:  Deep Neural Network for Classification
+
+THis walkthrough introduces new data.   There are 515,345 cases, with the first 463,715 being training cases and the last 51,630 cases used for testing. The first column of the dataset contains the year and the remaining columns are features from the timbre of songs. Download and decompress the data from here: http://archive.ics.uci.edu/ml/datasets/YearPredictionMSD. The goal is to predict the year each song was released. 
+
+```{r echo=FALSE}
+rm(list=ls())
+
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", prompt = FALSE)
+
+# download.file("http://archive.ics.uci.edu/ml/machine-learning-databases/00203/YearPredictionMSD.txt.zip", 
+#               destfile = "../Essentials/data/YearPredictionMSD.txt.zip")
+# unzip("../Essentials/data/YearPredictionMSD.txt.zip")
+
+## read data into R using fread() from data.table package
+d <- fread("../Essentials/data/YearPredictionMSD.txt", sep = ",")
+
+p.hist <- ggplot(d[, .(V1)], aes(V1)) +  geom_histogram(binwidth = 1) +  theme_classic() +  xlab("Year of Release") 
+print(p.hist) 
+```
+
+A possible concern is the relatively extreme values may exert an undue influence on the model. Could reduce this by excluding a small amount of the more extreme cases, such as by excluding the bottom and top 0.5% (1% of data total). Checking the quantiles would include the years 1957 to 2010.
+
+```{r}
+quantile(d$V1, probs = c(.005, .995)) 
+```
+
+ Trim data and convert the training and testing datasets for H2O.
+ 
+ 
+```{r}
+d.train <- d[1:463715][V1 >= 1957 & V1 <= 2010]
+d.test <- d[463716:515345][V1 >= 1957 & V1 <= 2010]
+
+localH2O = h2o.init(max_mem_size = "4G", nthreads = 2)
+h2omsd.train <- as.h2o(d.train, destination_frame = "h2omsdtrain")
+h2omsd.test <- as.h2o(d.test, destination_frame = "h2omsdtest") 
+```
+
+To provide some baseline performance levels, build a linear regression model.
+
+```{r}
+summary(m0 <- lm(V1 ~ ., data = d.train))$r.squared
+cor(d.test$V1,  predict(m0, newdata = d.test))^2 
+```
+
+Although not great, linear regression accounts for 24% of the variance in years in the training data and 23% in the testing data; these results provide a benchmark to beat with the feedforward neural network.
+
+The first network is shallow with a single hidden layer. To make performance scoring occur on the full dataset, we use the special value, 0, passed to the score_training_ samples and score_validation_samples arguments. 
+
+The results from this model show improvement over the linear regression model. The feedforward neural network, even though it only had a single layer with 50 hidden neurons, accounted for 32% of the variance in release year in the testing data, up from 23% using only linear regression. Because the model was small and had fewer hidden neurons than input variables, no dropout or other regularization was used. However, the performance discrepancy between the training and testing data (R2 = 0.37 versus R2 = 0.32, respectively) indicates that some regularization may be helpful.
+
+
+```{r}
+system.time(m1 <- h2o.deeplearning(x = colnames(d)[-1],  y = "V1",  training_frame= h2omsd.train,  validation_frame = h2omsd.test,  
+                  activation = "RectifierWithDropout",  hidden = c(50),  epochs = 100,  input_dropout_ratio = 0,  hidden_dropout_ratios = c(0),
+                  score_training_samples = 0,  score_validation_samples = 0,  diagnostics = TRUE,  export_weights_and_biases = TRUE,  
+                  variable_importances = TRUE)
+)
+m1
+```
+
+Although the shallow neural network model was an improvement over linear regression, it still did not perform well and there is room for improvement. Try a larger, deep feedforward neural network with 3 layers of hidden neurons, with 200, 200, and 400 hidden neurons, respectively. Also introduce a modest amount of dropout on the hidden (but not input) layer. 
+
+The model shows a noticeable improvement from the small and shallow model. In the testing data, the shallow model had an R2 of 0.32 whereas the deep model has an R2 of 0.35. There is also a degree of overfitting. The difference in R2 between the training and testing data is 0.05, which is comparable to the simpler model where the difference was also 0.05. The more complex model improves performance, with little difference in overfitting, perhaps due to the dropout used.
+
+```{r}
+system.time(
+     m2 <- h2o.deeplearning(x = colnames(d)[-1],  y = "V1",  training_frame= h2omsd.train,  validation_frame = h2omsd.test,  
+                  activation = "RectifierWithDropout",  hidden = c(200, 200, 400),  epochs = 100,  
+                  input_dropout_ratio = 0,  hidden_dropout_ratios = c(.2, .2, .2),  score_training_samples = 0,  
+                  score_validation_samples = 0,  diagnostics = TRUE,  export_weights_and_biases = TRUE,  
+                  variable_importances = TRUE) 
+)
+m2
+saveRDS(m2, "../Essentials/Walkthru3.rds")
+h2o.saveModel(object = m2, path = "/Essentials//data/Modelm2", force = TRUE) #See Appendix - note the path
+```
+
+To see whether the performance on the testing data can be improved further, try an additional model including substantially more hidden neurons in each layer, more training iterations (epochs) and with a higher degree of regularization. This code was not executed - it will take the best part of a day to complete.  (The performance of this model on the testing data was actually worse than either of the previous two models, though still superior to the linear regression.)
+
+```{r eval=FALSE}
+system.time(
+     m3 <- h2o.deeplearning(x = colnames(d)[-1], y = "V1", training_frame= h2omsd.train, validation_frame = h2omsd.test,
+                  activation = "RectifierWithDropout", hidden = c(500, 500, 1000), epochs = 500, input_dropout_ratio = 0,
+                  hidden_dropout_ratios = c(.5, .5, .5), score_training_samples = 0, score_validation_samples = 0,
+                  diagnostics = TRUE, export_weights_and_biases = TRUE, variable_importances = TRUE)
+)
+m3
+```
+
+The best model then is still the deep model, but with fewer hidden neurons per layer. One way that we can try to see if that model can be improved is to try training for additional epochs or iterations. In the model output, there is a model ID. For the best performing model, this was:
+
+DeepLearning_model_R_1500480383778_2
+
+This can be passed to the checkpoint argument of `h2o.deeplearning()` so  training begins using the weights from the previous model. 
+
+As long as the general architecture—the number of hidden neurons, layers, and connections—remains the same, using the checkpoint can be a great time saver. This is not only true because the previous training iterations can be re-used, but also because it tends to take longer for earlier than later iterations. The following example shows how to run the model, changing the epochs from 500 to 1,000 (since 500 have already been done) and starting from the previous model run by specifying the model name as a character string to the checkpoint argument:
+
+> Note that the model ID will be different every time you run the code; thus, when running it on your own computer or servers, you will need to use the model ID from your run.
+
+The additional epochs did not improve the model performance. In fact, it became slightly worse:
+
+```{r}
+m2b <- h2o.deeplearning(x = colnames(d)[-1], y = "V1", training_frame= h2omsd.train, validation_frame = h2omsd.test,
+                   activation = "RectifierWithDropout", hidden = c(200, 200, 400), checkpoint = "DeepLearning_model_R_1500480383778_2",
+                   epochs = 1000, input_dropout_ratio = 0, hidden_dropout_ratios = c(.2, .2, .2), score_training_samples = 0,
+                   score_validation_samples = 0, diagnostics = TRUE, export_weights_and_biases = TRUE, variable_importances = TRUE
+  )
+m2b
+```
+
+## Tuning & Optimizing Models
+
+- Dealing with missing data
+     - H2O includes a function to impute variables using the mean, median, or mode, and optionally to do so by some other grouping variables. 
+- Solutions for models with low accuracy
+
+### Missing Data
+
+```{r echo=FALSE}
+rm(list=ls())
+
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", "gridExtra", "mgcv", prompt = FALSE)
+
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+
+## setup iris data with some missing 
+d <- as.data.table(iris) 
+d[Species == "setosa", c("Petal.Width", "Petal.Length") := .(NA, NA)]#data table := is left assignment operator like <-
+h2o.dmiss <- as.h2o(d, destination_frame = "iris_missing") 
+h2o.dmeanimp <- as.h2o(d, destination_frame = "iris_missing_imp")
+```
+
+Do a simple mean imputation. This has to be done one column at a time.
+
+```{r}
+## mean imputation 
+# for loop from book does not work.  After the 1st loop h20.dmeanimp becomes numeric which then fails because the data for h20.impute must be h2oFrame
+# had to chage loop with h2o.dmeanimp2
+missing.cols <- colnames(h2o.dmiss)[apply(d, 2, anyNA)]
+for (v in missing.cols) {
+     h2o.dmeanimp2 <- h2o.impute(h2o.dmeanimp, column = v, method = "mean")
+}
+head(h2o.dmeanimp)
+```
+
+Instead of a simple mean imputation, could use simple prediction model. Build a random forest model to predict each missing column. All default values are used. (A glm model could also be used.)
+
+```{r}
+## random forest imputation
+d.imputed <- d
+
+## prediction model
+for (v in missing.cols) {
+     tmp.m <- h2o.randomForest(x = setdiff(colnames(h2o.dmiss), v), y = v, training_frame = h2o.dmiss)
+     yhat <- as.data.frame(h2o.predict(tmp.m, newdata = h2o.dmiss))
+     d.imputed[[v]] <- ifelse(is.na(d.imputed[[v]]), yhat$predict, d.imputed[[v]])
+}
+```
+
+To compare the different methods, create a scatter plot of petal length against petal width with the color and shape of the points determined by the flower species. This graph has three panels. The top panel is the original data. The middle panel is the data using mean imputation. The bottom panel is the data using random forest imputation.
+
+```{r}
+grid.arrange(
+     ggplot(iris, aes(Petal.Length, Petal.Width, color = Species, shape = Species)) + geom_point() + theme_classic() + ggtitle("Original Data"),
+     ggplot(as.data.frame(h2o.dmeanimp), aes(Petal.Length, Petal.Width, color = Species, shape = Species)) + geom_point() + 
+          theme_classic() + ggtitle("Mean Imputed Data"),
+     ggplot(d.imputed, aes(Petal.Length, Petal.Width, color = Species, shape = Species)) + geom_point() + theme_classic() + 
+          ggtitle("Random Forest Imputed Data"),
+     ncol = 1
+     )
+```
+
+The mean imputation creates aberrant values quite removed from reality. If needed, more advanced prediction models could be generated. In statistical inferences, multiple imputation is preferred over single imputation as the latter fails to account for uncertainty when imputing the missing values there is some degree of uncertainty as to exactly what those values are. In most use cases for deep learning, the datasets are far too large and the computational time too demanding to create multiple datasets with different imputed values, train models on each, and pool the results; thus, these simpler methods (such as mean imputation or using some other prediction model) are common. 
+
+```{r echo=FALSE}
+h2o.shutdown(prompt = FALSE)
+```
+
+
+### Low Accuracy Models
+
+- Grid Searches: several values for hyperparameters are specified and all possible combinations are tried.  Use `expand`
+- Random Searches
+
+#### Grid Search
+
+```{r eval=FALSE}
+expand.grid(layers = c(1, 2, 4), epochs = c(50, 100), l1 = c(.001, .01, .05))
+```
+
+Grid searching is excellent when there are only a few values for a few parameters. However, although this is a comprehensive way of assessing different parameter values, when there are many values for some or many parameters, it quickly becomes unfeasible. For example, even with only two values for each of eight parameters, there are 28 = 256 combinations, which quickly becomes computationally impracticable. In addition, if there are no interactions between parameters and model performance, or at least the interactions are small relative to the main effects, then grid searches are an inefficient approach because many parameter values are repeated so that only a small set of values is sampled, even though many combinations are tried.
+
+#### Random Search
+
+Rather than prespecifying all the values to try and creating all possible combinations, randomly sample values for the parameters, fit a model, store the results, and repeat. To get a very large sample size, this too would be computationally demanding. Specify are the values to randomly sample or distributions to randomly draw from. Limits would also be set. For example, although a model could theoretically have any integer number of layers, some reasonable number (such as 1 to 10) is used rather than sampling integers from 1 to a billion.
+
+For random sampling, write a function that takes a seed and then randomly samples a number of hyperparameters, stores the sampled parameters, runs the model, and returns the results. Do not sampling from every possible hyperparameter. Many remain fixed at values or their defaults. For some parameters, specifying how to randomly sample values requires thought. For example, when using dropout for regularization, it is common to have a relatively smaller amount of dropout for the input variables (around 20% commonly) and a higher amount for hidden neurons (around 50% commonly). Choosing the right distributions can allow us to encode this prior information into our random search. 
+
+The following code plots the density of two beta distributions. By sampling from these distributions, it ensures the search, while random, focuses on small proportions of dropout for the input variables and in the 0 to 0.50 range for the hidden neurons with a tendency to oversample from values closer to 0.50.
+
+```{r}
+par(mfrow = c(2, 1))
+plot(seq(0, .5, by = .001), dbeta(seq(0, .5, by = .001), 1, 12), type = "l", xlab = "x", ylab = "Density", main = "Density of a beta(1, 12)")
+
+plot(seq(0, 1, by = .001)/2, dbeta(seq(0, 1, by = .001), 1.5, 1), type = "l", xlab = "x", ylab = "Density", main = "Density of a beta(1.5, 1) / 2")
+```
+
+Create a function `myRun()`. It requires is a seed, which is used to make the parameter selection reproducible. A name can be specified, although there is a default based on the seed, and there is an optional (logical) argument, run, to control whether or not the model is run. This is helpful if you want to check the hyperparameter values sampled.
+
+- sample the depth or number of layers from 1 to 5 
+- number of neurons in each layer from 20 to 200; by default each will have an equal probability (was 20 to 600)
+     - `runif()` samples from a uniform distribution in the specified range
+     - beta distribution using `rbeta()` 
+- To automatically tune the learning rate, use ADADELTA as H~2~O does.  Two hyperparameters that need to be specified: rho and epsilon. 
+     - rho parameter weights the gradients prior to the current iteration
+          - 1 – rho is used to weight the gradient at the current iteration. 
+          - If rho = 1 then the current gradient is not used and it is completely based on the previous gradients. 
+          - If rho = 0, the previous gradients are not used and it is completely based on the current gradient. 
+          - values between .9 and .999  are used
+     - epsilon parameter is a small constant that is added when taking the root mean square of previous squared gradients to improve conditioning 
+
+```{r}
+myRun <- function(seed, name = paste0("m_", seed), run = TRUE) {
+  set.seed(seed)
+
+  p <- list(Name = name, seed = seed,
+            depth = sample(1:5, 1),
+            l1 = runif(1, 0, .01),
+            l2 = runif(1, 0, .01),
+            input_dropout = rbeta(1, 1, 12),
+            rho = runif(1, .9, .999),
+            epsilon = runif(1, 1e-10, 1e-4))
+
+  p$neurons <- sample(20:200, p$depth, TRUE)
+  p$hidden_dropout <- rbeta(p$depth, 1.5, 1)/2
+
+  if (run) {model <- h2o.deeplearning(x = colnames(use.train.x), y = "Outcome", training_frame = h2oactivity.train,
+                       #activation = "RectifierWithDropout", 
+                       activation = "TanhWithDropout",
+                       hidden = p$neurons, epochs = 100, loss = "CrossEntropy",
+                       input_dropout_ratio = p$input_dropout, hidden_dropout_ratios = p$hidden_dropout, 
+                       l1 = p$l1, l2 = p$l2, rho = p$rho, epsilon = p$epsilon, export_weights_and_biases = TRUE, model_id = p$Name)
+
+  ## performance on training data
+  p$MSE <- h2o.mse(model)
+  p$R2 <- h2o.r2(model)
+  p$Logloss <- h2o.logloss(model)
+  p$CM <- h2o.confusionMatrix(model)
+
+  ## performance on testing data
+  perf <- h2o.performance(model, h2oactivity.test)
+  p$T.MSE <- h2o.mse(perf)
+  p$T.R2 <- h2o.r2(perf)
+  p$T.Logloss <- h2o.logloss(perf)
+  p$T.CM <- h2o.confusionMatrix(perf)
+
+  } else {
+    model <- NULL
+  }
+
+  return(list(Params = p, Model = model))
+}
+```
+
+##### Test myRun
+
+```{r getDataAgain}
+rm(list=ls())
+
+#Remove all packages loaded in environment
+lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE)
+#Apply packages
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", "mgcv", prompt = FALSE)
+
+# data and H2O setup
+use.train.x <- read.table("../Essentials/data/X_train.txt")
+use.train.y <- read.table("../Essentials/data/y_train.txt")[[1]]
+use.test.x <- read.table("../Essentials/data/X_test.txt")
+use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
+
+use.train <- cbind(use.train.x, Outcome = factor(use.train.y)) 
+use.test <- cbind(use.test.x, Outcome = factor(use.test.y))
+
+use.labels <- read.table("../Essentials/data/activity_labels.txt")
+
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+h2oactivity.train <- as.h2o(use.train, destination_frame = "h2oactivitytrain")
+h2oactivity.test <- as.h2o(use.test, destination_frame = "h2oactivitytest")
+```
+
+To make the parameters reproducible,  specify a list of random seeds which loop through to run the models.
+
+```{r}
+use.seeds <- c(1234, 2345, 3456, 4567, 5678, 6789, 78900, 1122, 2233, 3344, 4455, 5566, 6677, 7788, 8899, 9988, 8877, 7766, 6655, 5544, 4433, 3322, 2211)
+
+model.res <- lapply(use.seeds, myRun)
+saveRDS(model.res, "../Essentials/modelres.rds")
+```
+
+Once the models are done, we can create a dataset, and plot the mean squared error (MSE) against the different parameters.
+
+```{r warning=FALSE}
+model.res.dat <- do.call(rbind, lapply(model.res, function(x) 
+     with(x$Params,
+          data.frame(l1 = l1, l2 = l2, 
+          depth = depth, 
+          input_dropout = input_dropout, 
+          SumNeurons = sum(neurons),
+          MeanHiddenDropout = mean(hidden_dropout), 
+          rho = rho, epsilon = epsilon, MSE = T.MSE))))
+
+p.perf <- ggplot(melt(model.res.dat, id.vars = c("MSE")), aes(value, MSE)) +  geom_point() +  stat_smooth(color = "black") +  
+     facet_wrap(~ variable, scales = "free_x", ncol = 2) +  theme_classic() 
+print(p.perf)
+```
+
+It can be helpful to use a multivariate model to simultaneously take different parameters into account. To fit this (and allow some non-linearity), use a generalized additive model, using `gam()` from `mgcv`. Hypothesize an interaction between the model depth and total number of hidden neurons, which are captured by including both of those terms in a tensor expansion using `te()` with the remaining terms given univariate smooths, using `s()`.
+
+```{r}
+m.gam <- gam(MSE ~ s(l1, k = 4) + s(l2, k = 4) + s(input_dropout) +  s(rho, k = 4) + s(epsilon, k = 4) + 
+                  s(MeanHiddenDropout, k = 4) + te(depth, SumNeurons, k = 4), data = model.res.dat) 
+```
+
+
+
+on page 136
+see https://www.r-bloggers.com/building-deep-neural-nets-with-h2o-and-rsparkling-that-predict-arrhythmia-of-the-heart/
 
 ## Appendix
 
@@ -674,5 +1755,64 @@ p.shrinkage <- ggplot(shrinkage, aes(interaction(Size, Pkg, sep = " : "), Accura
   xlab("") + ylab("Accuracy + 95% CI") +
   theme_classic() +
   theme(legend.key.size = unit(1, "cm"), legend.position = c(.8, .2))
+```
+
+#### Save H~2~0 Model
+
+It is easy to save models in R but, when calling H2O from R, most results are not actually stored in R; instead they are stored in the H2O cluster. Thus, only saving the R object will merely save the reference to the model in the H2O cluster and, if that is shut down and lost, the full model results will not be saved. 
+
+To avoid this and save the full model results, use `h2o.saveModel()` and specify the model to be saved (by passing the R object), the path, and whether to overwrite files if already there (using force = TRUE):
+
+```{r exampleSaveH2O, eval=FALSE}
+h2o.saveModel(object = m2, path = "c:\\Users\\jwile\\DeepLearning", force = TRUE) 
+```
+
+This will create a directory with all of the files needed to load and use the model again. Once you have saved a model, you can load it back into a new H2O cluster using `h2o.loadModel()`. Also specify the folder name for the model results to load. 
+
+> H~2~O models can be saved as a Plain Old Java Object (POJO). Saving models as a POJO is useful as they can be embedded in other applications and used to score results. H2O models can be saved as a POJO using the h2o.download_pojo() function, with the same arguments. 
+
+#### `h20.scoreHistory`
+
+The score history shows the performance of the model across iterations as well as a time stamp and the duration for each epoch.  Example:
+
+```{r}
+h2o.scoreHistory(m2)
+```
+
+Although this is a useful summary, it provides less than a complete picture. Examining the model residuals can help us understand whether the model performs consistently across the range of the data and any anomalous residuals; it also helps us to generally assess performance more comprehensively.  
+
+Calculate residuals by getting predicted values for all cases using `h2o.predict()` and  taking the difference between the observed values and the predictions. The following code extracts predictions, joins them with observed values, and plots them. A residual of zero indicates a perfect prediction, with either positive or negative residuals indicating over- or under-prediction. Since years are discrete, we can visualize the data using boxplots of the residuals for each actual year of song release.  This is borrowing the code from the 3rd walkthru.
+
+```{r}
+yhat <- as.data.frame(h2o.predict(m2, h2omsd.train))
+yhat <- cbind(as.data.frame(h2omsd.train[["V1"]]), yhat)
+
+p.resid <- ggplot(yhat, aes(factor(V1), predict - V1)) + geom_boxplot() + geom_hline(yintercept = 0) + theme_classic() +
+     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 0)) + xlab("Year of Release") + 
+     ylab("Residual (Predicted - Actual Year of Release)")
+print(p.resid)
+```
+
+The results show a marked pattern of decreasing residuals in later years or, conversely, show extremely aberrant model predictions for the earlier years. In part, this may be due to the distribution of the data. With most cases coming from the mid 1990s to 2000s, the model will be most sensitive to accurately predicting these values, and the comparatively fewer cases before 1990 or 1980 will have less influence.
+
+Because we used `variable_importances` argument, we can extract the relative importance of each variable for the model using `h2o.varimp()`. Although it is difficult to accurately apportion the importance of each variable, it can be helpful to provide a rough sense of which variables tend to make a larger contribution to the prediction than others. This can be a helpful way to exclude some variables that contribute very little, for example. The following code extracts the important variables, prints the top 10 (the dataset is sorted from most to least important) and makes a graph of the results to display the distribution.
+
+```{r}
+imp <- as.data.frame(h2o.varimp(m2))
+imp[1:10, ]
+
+p.imp <- ggplot(imp, aes(factor(variable, levels = variable), percentage)) + geom_point() + theme_classic() + theme(axis.text.x = element_blank()) +
+     xlab("Variable Number") + ylab("Percentage of Total Importance")
+print(p.imp)
+```
+
+From the description of the dataset, the first 12 variables represented various timbres of the music, with the next 78 being the unique elements of a covariance matrix from the first 12. Thus it is interesting that, in the top variables, the first three are all the timbres, not from the covariances. If, for example, the later 78 variables were costly or difficult to collect, we might consider what performance is possible using only the first 12 predictors. The following model tests that approach using a simple shallow model.
+
+```{r}
+mtest <- h2o.deeplearning(x = colnames(d)[2:13], y = "V1", training_frame= h2omsd.train, validation_frame = h2omsd.test,
+                activation = "RectifierWithDropout", hidden = c(50), epochs = 100, input_dropout_ratio = 0, hidden_dropout_ratios = c(0),
+                score_training_samples = 0, score_validation_samples = 0, diagnostics = TRUE, export_weights_and_biases = TRUE,
+                variable_importances = TRUE)
+mtest
 ```
 

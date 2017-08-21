@@ -1,0 +1,149 @@
+---
+title: "Deep Learning with R Part 5"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+rm(list=ls())
+#Remove all packages loaded in environment
+try(lapply(paste('package:', names(sessionInfo()$otherPkgs), sep=""), detach, character.only=TRUE, unload=TRUE), silent = TRUE)
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("data.table", "ggplot2", "parallel", "caret", "h2o", prompt = FALSE)
+```
+
+## Deep Prediction Models
+
+Two common applications of auto-encoders and unsupervised learning are to identify anomalous data and to pre-train more complex models such as deep neural networks. Now train and build deep neural networks to develop prediction models (supervised learning).
+
+- Deep feedforward neural networks
+- Common activation functions: rectifiers, hyperbolic tangent, and maxout
+- Picking hyperparameters
+- Training and predicting new data from a deep neural network
+- Walkthrough:  training a deep neural network for automatic classification
+
+### Feedforward Neural Networks
+
+A deep feedforward neural network is designed to approximate a function, f(), that maps some set of input variables, x, to an output variable, y. They are called feedforward neural networks because information flows from the inputs through each successive layer as far as the output and there are no feedback or recursive loops (models including both forward and backward connections are referred to as recurrent neural networks). 
+
+Deep feedforward neural networks are applicable to a wide range of problems and are particularly useful for applications such as image classification. More generally, feedforward neural networks are useful for prediction and classification where there is a clearly defined outcome (what digit an image contains, whether someone is walking upstairs or walking on a flat surface, the presence/absence of disease, and so on). In these cases, there is no need for a feedback loop. Recurrent networks are useful for cases where feedback loops are important, such as for natural language processing.
+
+A different function is learned for each successive layer. If sufficient hidden neurons are included in a layer, it can approximate to the desired degree of precision with many different types of functions. Even if the mapping from the final hidden layer to the outcome is a linear mapping with learned weights, feedforward neural networks can approximate nonlinear functions, by first applying non-linear transformations from the input layer to the hidden layer. *This is one of the key strengths of deep learning*. In linear regression, for example, the model learns the weights from the inputs to the outcome. However, the functional form must be specified. In deep feedforward neural networks, the transformations from the input layer to the hidden layer are learned as well as the weights from the hidden layer to the outcome. The model learns the functional form as well as the weights. The more hidden neurons, the closer the approximation. Thus for practical purposes, the model learns the functional form.
+
+### Common Activation Functions
+
+- rectifiers
+- hyperbolic tangent
+- maxout
+
+The activation function determines the mapping between inputs and a hidden layer. It defines the functional form for how a neuron gets activated. 
+
+- linear activation function could be defined as: f(x) = x, in which case the value for the neuron would be the raw input, x, times the learned weight, a linear model. The problem with making activation functions linear is that this does not permit any non-linear functional forms to be learned. 
+- Previously, we  used the hyperbolic tangent as an activation function, so f(x) = tanh(x). The hyperbolic tangent can work well in some cases, but a potential limitation is that, at either low or high values, it saturates
+- Perhaps the most popular activation function currently, and a good first choice is known as a rectifier. There can be different kinds of rectifiers but, most commonly, linear rectifiers are used and are defined by the function f(x) = max(0, x). Linear rectifiers are flat below some threshold and are then linear.  Despite their simplicity, linear rectifiers provide a non-linear transformation, and enough linear rectifiers can be used to approximate arbitrary non-linear functions, unlike using only linear activation functions. 
+- A final type of activation function is maxout. A maxout unit takes the maximum value of its inputs, although as usual this is after weighting so it is not the case that the input variable with the highest value will always win. Maxout activation functions seem to work particularly well with dropout.
+
+```{r out.width = "500px", echo=FALSE}
+knitr::include_graphics("./images/deeplearning22.JPG")
+```
+
+### Picking Hyperparameters
+
+The parameters of a model typically refer to things such as the weights or bias/ intercept parameters. However, there are many other parameters that must be set at the offset and are not optimized or learned during model training. These are sometimes referred to as hyperparameters. Even the choice of model (for example, deep feedforward neural network, random forest, or support vector machine) can be seen as a hyperparameter. 
+
+Even if we assume a deep feedforward neural network is the best modeling strategy, there are still many hyperparameters that must be set. These hyperparameters may be explicitly specified by the user or implicitly specified by using default values, where software provides them. The values chosen for the hyperparameters can have a dramatic impact on the accuracy and training speed of a model. We have already seen examples of trying different hyperparameters, such as trying different numbers of hidden neurons in a layer or a different number of layers. However, other hyperparameters also impact performance and speed. For example, in the following code, we set up the R environment, load the Modified National Institute of Standards and Technology (MNIST) data (images of handwritten digits) we have worked with, and run two prediction models, only varying the learning rate:
+
+For example, the higher learning rate is faster but sacrifices performance. Because there are many hyperparameters, the decision about one is not made in isolation from the rest. One example of this is regularization. Often, relatively larger or more complex models are used with many hidden neurons and possibly multiple layers, choices that will tend to increase accuracy (at least within the training data) and reduce speed. However, these complex models often include some form of regularization, such as dropout, which would tend to reduce accuracy (at least within the training data) and improve speed as only a subset of neurons are included in any given iteration. 
+
+Decisions must be made as to how many layers there should be, how many hidden neurons should be in each layer, whether there should be any skipping patterns or each layer should only have sequential connections. Unfortunately, there are no simple rules to follow to resolve many of these questions. Experience matters (as does patience workin through many experiments.)
+
+Understanding what each hyperparameter helps to inform your decisions. If you start with a model and its performance is worse than is acceptable hyperparameters should be changed to allow greater capacity and flexibility in the model, for example, adding more hidden neurons, additional layers of hidden neurons, more training epochs, etc. If there is a large difference between the model's performance on the training data and testing data, this may suggest the model is overfitting the data, in which case hyperparameters may be tweaked to reduce capacity or add more regularization. 
+
+### Training & Predicting Using Deep Neural Network
+
+Get data that we have used before.
+
+```{r eval=FALSE}
+# data and H2O setup
+use.train.x <- read.table("../Essentials/data/X_train.txt")
+use.train.y <- read.table("../Essentials/data/y_train.txt")[[1]]
+use.test.x <- read.table("../Essentials/data/X_test.txt")
+use.test.y <- read.table("../Essentials/data/y_test.txt")[[1]]
+
+use.train <- cbind(use.train.x, Outcome = factor(use.train.y)) 
+use.test <- cbind(use.test.x, Outcome = factor(use.test.y))
+
+use.labels <- read.table("../Essentials/data/activity_labels.txt")
+save(use.train.x, use.train.y, use.test.x, use.test.y, use.labels, use.train, use.test, file="../Essentials/Part5Data.RData")
+```
+```{r echo=FALSE}
+load("../Essentials/Part5Data.RData")
+```
+
+```{r}
+localH2O = h2o.init(max_mem_size = "3G", nthreads = 2)
+```
+```{r message=FALSE}
+h2oactivity.train <- as.h2o(use.train, destination_frame = "h2oactivitytrain", h2o.no_progress())
+h2oactivity.test <- as.h2o(use.test, destination_frame = "h2oactivitytest", h2o.no_progress())
+```
+
+Already learned the components of training a deep prediction model. Previously used `h2o.deeplearning()` for the auto-encoder models.  Below, specify the variable names for both the x and y arguments. 
+
+- Activation function used is a linear rectifier
+     - dropout both on the input variables (20%) and the hidden neurons (50%).
+- Shallow network with only 50 hidden neurons and 10 training iterations. 
+- Cost (loss) function is cross-entropy
+
+The model includes a total of 28,406 weights/biases. Biases are like intercepts or constant offsets. Because this is a feedforward neural network, there are only weights between adjacent layers. Input variables do not have biases, but hidden neurons and outcomes do. The 28,406 weights are made up from 561 x 50 = 28,050 weights between the input variables and the first layer of hidden neurons, 50 x 6 = 300 weights between the hidden neurons and the outcome (6 because there are different levels of the outcome), 50 biases for the hidden neurons, and 6 biases for the outcome.
+
+Output also shows the number of layers and the number of units in each layer, the type of each unit, the dropout percentage, and other regularization and hyperparameter information.
+
+A confusion matrix is printed which shows the actual outcome against the predicted outcome. The observed outcome is shown on the rows and the predicted outcome is shown on the columns. The diagonal indicates correct classification and the error rate by outcome level.
+
+```{r}
+mt1 <- h2o.deeplearning(x = colnames(use.train.x), y = "Outcome", training_frame = h2oactivity.train,
+         activation = "RectifierWithDropout", hidden = c(50), epochs = 10, rate = .005, loss = "CrossEntropy",
+         input_dropout_ratio = .2, hidden_dropout_ratios = c(.5), export_weights_and_biases = TRUE
+)
+mt1
+```
+
+Extract and look at the features of the model using `h2o.deepfeatures()` specifying the model, data, and layer. The code extracts features and looks at the first few rows. The outcome is also included by default. Note the zeros in the features; these are there because we used a linear rectifier so values below zero are censored at zero.
+
+```{r}
+f <- as.data.frame(h2o.deepfeatures(mt1, h2oactivity.train, 1))
+f[1:10, 1:5]
+```
+
+Extract weights from each layer. The following code extracts weights and makes a heatmap so we can see if there are any clear patterns of certain input variables having higher weights to particular hidden neurons.  There does not seem to be any particularly clear pattern . . . .
+
+```{r}
+w1 <- as.matrix(h2o.weights(mt1, 1))
+## plot heatmap of the weights 
+tmp <- as.data.frame(t(w1)) 
+tmp$Row <- 1:nrow(tmp) 
+tmp <- melt(tmp, id.vars = c("Row"))
+p.heat <- ggplot(tmp, aes(variable, Row, fill = value)) +  geom_tile() +  scale_fill_gradientn(colours = c("black", "white", "blue")) +  
+     theme_classic() +  theme(axis.text = element_blank()) +  xlab("Hidden Neuron") +  ylab("Input Variable") +  
+     ggtitle("Heatmap of Weights for Layer 1") 
+print(p.heat)
+```
+
+Now predict using the model aboce using `h2o.predict()`:
+
+```{r}
+yhat.h2o <- as.data.frame(h2o.predict(mt1, newdata = h2oactivity.train))
+head(yhat.h2o)
+```
+```{r}
+h2o.shutdown(prompt = FALSE)
+```
+

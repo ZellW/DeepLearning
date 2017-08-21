@@ -1,0 +1,225 @@
+---
+title: "Deep Learning with R Part 4"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+## Auto-Encoders
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+try(rm(list=ls()), silent = TRUE)
+try(lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE), silent = TRUE)
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("parallel", "foreach", "doSNOW", "caret", "data.table", "h2o", prompt = FALSE)
+```
+
+Auto-encoders are neural networks.  What distinguishes auto-encoders from other forms of neural network is that auto-encoders are trained to reproduce or predict the inputs. The hidden layers and neurons are not maps between an input and some other outcome, but are self (auto)-encoding.  
+
+One way to use auto-encoders is to perform dimension reduction. Auto-encoders with a lower dimensionality than the raw data are called undercomplete; by using an undercomplete auto-encoder, one can force the auto-encoder to learn the most salient or prominent features of the data.  A common application of auto-encoders is to pre-train deep neural networks or other supervised learning models.
+
+Using an undercomplete model is effectively a way to regularize the model. However, it is also possible to train overcomplete auto-encoders where the hidden dimensionality is greater than the raw data, so long as some other form of regularization is used.
+
+### Train Auto-Encoder using H~2~O
+
+```{r echo=FALSE}
+# data and H2O setup
+digits.train <- read.csv("../Essentials/data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9)
+
+cl <- h2o.init(max_mem_size = "4G", nthreads = 2, startH2O = TRUE)
+h2odigits <- as.h2o(digits.train, destination_frame = "h2odigits")
+
+i <- 1:20000
+h2odigits.train <- h2odigits[i, -1]
+
+itest <- 20001:30000
+h2odigits.test <- h2odigits[itest, -1]
+
+xnames <- colnames(h2odigits.train)
+```
+
+`h2o.deeplearning()`:
+
+- x, or input, variable names. 
+- activation function to use here: "Tanh"
+- autoencoder = TRUE argument, the model is an auto-encoder model, rather than a regular model, so that no y or outcome variable(s) need to be specified
+- start with a single layer (shallow) of hidden neurons, with 50 hidden neurons. 
+- 20 training iterations, called epochs. 
+- remaining arguments just specify not to use any form of regularization for this model. Regularization is not needed as there are hundreds of input variables and only 50 hidden neurons, so the relative simplicity of the model provides all the needed regularization
+
+Note: Have to comment out `hidden_dropout_ratios = c(0)`.  Otherwise preseted with this error:
+
+<span style="color:red">Details: ERRR on field: _hidden_dropout_ratios: Cannot specify hidden_dropout_ratios with a non-dropout activation function. Use 'RectifierWithDropout', 'TanhWithDropout', etc.</span>
+
+```{r eval=FALSE}
+m1 <- h2o.deeplearning(
+  x = xnames, training_frame= h2odigits.train, validation_frame = h2odigits.test, 
+  activation = "TanhWithDropout", autoencoder = TRUE, hidden = c(50), epochs = 20, 
+  sparsity_beta = 0, input_dropout_ratio = 0, hidden_dropout_ratios = c(0), l1 = 0, l2 = 0
+)
+
+save(m1, file="../Essentials/m1.RData")
+```
+
+```{r echo=FALSE}
+load("../Essentials/m1.RData")
+```
+
+The remaining models are similar to the first model, m1, but adjust the complexity of the model by increasing the number of hidden neurons and adding regularization. 
+
+- m2a has no regularization, but increases the number of hidden neurons to 100. 
+- m2b uses 100 hidden neurons and also a sparsity beta of .5. 
+- m2c uses 100 hidden neurons and a 20% dropout of the inputs (the x variables), which results in a form of corrupted inputs.  m2c is a form of denoising auto-encoder
+
+```{r eval=FALSE}
+m2a <- h2o.deeplearning(x = xnames, training_frame= h2odigits.train, 
+              validation_frame = h2odigits.test, activation = "TanhWithDropout",
+              autoencoder = TRUE, hidden = c(100), epochs = 20, sparsity_beta = 0, 
+              input_dropout_ratio = 0, hidden_dropout_ratios = c(0), l1 = 0, l2 = 0)
+
+m2b <- h2o.deeplearning(x = xnames, training_frame= h2odigits.train, 
+              validation_frame = h2odigits.test, activation = "TanhWithDropout",
+              autoencoder = TRUE, hidden = c(100), epochs = 20, sparsity_beta = .5, 
+              input_dropout_ratio = 0, hidden_dropout_ratios = c(0), l1 = 0, l2 = 0)
+
+m2c <- h2o.deeplearning(x = xnames, training_frame= h2odigits.train, 
+              validation_frame = h2odigits.test, activation = "TanhWithDropout",
+              autoencoder = TRUE, hidden = c(100), epochs = 20, sparsity_beta = 0, 
+              input_dropout_ratio = .2, hidden_dropout_ratios = c(0), l1 = 0, l2 = 0)
+save(m2a, m2b, m2c, file="../Essentials/mXmodels.RData")
+```
+```{r echo=FALSE}
+load("../Essentials/mXmodels.RData")
+```
+
+Below, for each model the following output shows the performance as the mean squared error (MSE) in the training and validation data. A zero MSE indicates a perfect fit with higher values indicating deviations between g(f(x)) and x. 
+
+- m1, the MSE is fairly low and identical in the training and validation data. This may be in part due to how relatively simple the model is (50 hidden neurons and 20 epochs, when there are hundreds of input variables)
+- m2a there is about a 45% reduction in the MSE, although both are low. However, with the greater model complexity, a slight difference between the training and validation metrics is observed
+- Similar results are noted in model m2b. Despite the fact that the validation metrics did not improve with regularization, the training metrics were closer to the validation metrics, suggesting the performance of the regularized training data generalizes better
+- m2c the 20% input dropout without additional model complexity results in poorer performance in both the training and validation data. Our initial model with 100 hidden neurons is too simple still to really need much regularization
+
+```{r}
+m1
+m2a
+m2b
+m2c
+```
+
+Another way we can look at the model results is to calculate how anomalous each case is. This can be done using the h2o.anomaly() function. The results are converted to data frames, labeled, and joined together in one final data table object called error:
+
+```{r eval=FALSE}
+error1 <- as.data.frame(h2o.anomaly(m1, h2odigits.train)) 
+error2a <- as.data.frame(h2o.anomaly(m2a, h2odigits.train)) 
+error2b <- as.data.frame(h2o.anomaly(m2b, h2odigits.train)) 
+error2c <- as.data.frame(h2o.anomaly(m2c, h2odigits.train))
+
+error <- as.data.table(rbind(cbind.data.frame(Model = 1, error1),  
+              cbind.data.frame(Model = "2a", error2a),
+              cbind.data.frame(Model = "2b", error2b),  
+              cbind.data.frame(Model = "2c", error2c)))
+save(error, error1, error2a, error2b, error2c, file="../Essentials/error.RData")
+```
+```{r echo=FALSE}
+load("../Essentials/error.RData")
+```
+```{r}
+error
+```
+
+use `data.table` to create a new data object, percentile, that contains the 99th percentile for each model
+
+```{r}
+percentile <- error[, .(Percentile = quantile(Reconstruction.MSE, probs = .99) ), by = Model] 
+percentile
+```
+
+Combining the information on how anomalous each case is and the 99th percentile, both by model, use `ggplot2` to plot results. The histograms show the error rates for each case and the dashed line is the 99th percentile. Any value beyond the 99th percentile may be considered fairly extreme or anomalous.
+
+```{r}
+p <- ggplot(error, aes(Reconstruction.MSE)) +  geom_histogram(binwidth = .001, fill = "grey50") + 
+     geom_vline(aes(xintercept = Percentile), data = percentile, linetype = 2) +  
+     theme_bw() +  facet_wrap(~Model) 
+print(p)
+```
+
+If we merge the data in wide form, with the anomaly values for each model in separate columns rather than in one long column with another indicating the model, we can plot the anomalous values against each other. 
+
+```{r}
+error.tmp <- cbind(error1, error2a, error2b, error2c) 
+colnames(error.tmp) <- c("M1", "M2a", "M2b", "M2c") 
+plot(error.tmp)
+```
+
+Another way we can examine the model results is to extract the deep features from the model. Deep features (layer by layer) can be extracted using the `h2o.deepfeatures()`. The deep features are the values for the hidden neurons in the model. One way to explore these features is to correlate them and examine the distribution of correlations using `ggplot2`.  The deep features have small correlations, r, with an absolute value < .20, with only very few having |r| > .20.
+
+```{r eval=FALSE}
+features1 <- as.data.frame(h2o.deepfeatures(m1, h2odigits.train)) 
+save(features1, file="../Essentials/features1.RData")
+```
+```{r}
+load("../Essentials/features1.RData")
+r.features1 <- cor(features1) 
+r.features1 <- data.frame(r = r.features1[upper.tri(r.features1)])
+
+p.hist <- ggplot(r.features1, aes(r)) +  geom_histogram(binwidth = .02) +  theme_classic() 
+print(p.hist)
+```
+
+The examples so far show how auto-encoders can be trained but have only represented shallow auto-encoders with a single hidden layer. 
+
+Given that we know the MNIST dataset consists of 10 different handwritten digits, perhaps try adding a second layer of hidden neurons with only 10 neurons, supposing when the model learns the features of the data, 10 prominent features may correspond to the 10 digits.
+
+To add this second layer of hidden neurons, we pass a vector, c(100, 10), to the hidden argument and update the hidden_dropout_ratios argument because a different dropout ratio can be used for each hidden layer'
+
+```{r eval=FALSE}
+m3 <- h2o.deeplearning(x = xnames, training_frame= h2odigits.train, validation_frame = h2odigits.test,  
+                       activation = "Tanh",  autoencoder = TRUE,  hidden = c(100, 10),  epochs = 30,  
+                       sparsity_beta = 0,  input_dropout_ratio = 0,  l1 = 0,  l2 = 0 )
+save(m3, file="../Essentials/m3.RData")
+```
+```{r echo=FALSE}
+load("../Essentials/m3.RData")
+```
+
+Extract the values for the hidden neurons using `h2o.deepfeatures()`specifying the values for layer 2. The first six rows of these features are shown next.
+
+```{r eval=FALSE}
+features3 <- as.data.frame(h2o.deepfeatures(m3, h2odigits.train, 2)) 
+save(features3, file="../Essentials/features3.RData")
+```
+```{r}
+load("../Essentials/features3.RData")
+head(features3)
+```
+
+Because there are no outcomes being predicted, these values are continuous and are not probabilities of there being a particular digit but just values on 10 continuous hidden neurons. 
+
+Next add in the actual digit labels from the training data and use `melt()` to reshape the data into a long dataset. Plot the means on each of the 10 hidden layers by which digit a case actually belongs to. If the 10 hidden features roughly correspond to the 10 digit labels, for particular labels (for example, 0, 3, etc.) they should have an extreme value on one deep feature, indicating the correspondence between a deep feature and the actual digits.
+
+```{r}
+features3$label <- digits.train$label[i] 
+features3 <- melt(features3, id.vars = "label")
+p.line <- ggplot(features3, aes(as.numeric(variable), value, colour = label, linetype = label)) +  
+     stat_summary(fun.y = mean, geom = "line") +  scale_x_continuous("Deep Features", breaks = 1:10) +  
+     theme_classic() +  theme(legend.position = "bottom", legend.key.width = unit(1, "cm")) 
+print(p.line)
+```
+
+Although there does seem to be some correspondence (for example, zeros are particularly high on deep features 4 and 7), in general the results are quite noisy without particularly clear indication of a high degree of separation between deep features and the actual digit labels. 
+
+Take a look at the performance metrics for the model. With an MSE of about 0.039, the model fits substantially worse than did the shallow model, probably because having only 10 hidden neurons for the second layer is too simplistic to capture all the different features of the data needed to reproduce the original inputs.
+
+```{r}
+m3
+```
+```{r echo=FALSE}
+h2o.shutdown(prompt = FALSE)
+```

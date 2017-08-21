@@ -1,0 +1,236 @@
+---
+title: "Deep Learnintg with R Part 3"
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+header-includes: \usepackage{graphicx} \usepackage{mathtools}
+---
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("caret", "glmnet", "MASS", "doSNOW", prompt = FALSE)
+```
+
+## Overfitting
+
+Explore different approaches that can be used to prevent models from overfitting the data to improve generalizability, called regularization on unsupervised data. While models are trained by optimizing parameters in a way that reduces the training error, regularization is concerned with reducing testing or validation errors so  the model performs well with new data. 
+
+- L1 Penalty
+- L2 Penalty
+- Ensembles & Model Averaging
+
+### L1
+
+L1 penalty (Least Absolute Shrinkage and Selection Operator- lasso) is used to shrink weights towards zero. The penalty term uses the sum of the absolute weights so the degree of penalty is no smaller or larger for small or large weights, with the result that small weights may get shrunken to zero. The strength of the penalty is controlled by a hyperparameter, λ, which multiplies the sum of the absolute weights.  λ is treated as a hyperparameter and optimized by evaluating a range of possible λ values (for example, through cross validation).
+
+> If you only consider variables for which the L1 penalty leaves non-zero weights, it can essentially function as feature selection, a primary motivation of another name commonly used for the L1 penalty, the Least Absolute Shrinkage and Selection Operator, or lasso. Even outside the usage of strict feature selection, the tendency for the L1 penalty to shrink small coefficients to zero can be convenient for simplifying the interpretation of the model results. 
+
+Data has been created based on samples from a multivariate noram distribution.
+
+Fit ordinary least squares regression model to the first 100 records and use the lasso. To use the lasso, use `glmnet()`. This can fit the L1 or the L2 penalties.  When alpha = 1, it is the L1 penalty (lasso).  When alpha = 0 it is the L2 penalty (ridge regression). Because we do not know the value of lambda we should pick, we can evaluate a range of options and tune this hyperparameter automatically using cross validation by using `cv.glmnet()`.
+
+```{r}
+#Fake data
+X <- mvrnorm(n = 200, mu = c(0, 0, 0, 0, 0),  
+             Sigma = matrix(c(1, .9999, .99, .99, .10, .9999, 1, .99, .99, .10, .99, .99, 1, .99, .10, .99, .99, .99, 1, .10, .10, .10, .10, .10, 1), 
+             ncol = 5))
+y <- rnorm(200, 3 + X %*% matrix(c(1, 1, 1, 1, 0)), .5)
+
+m.ols <- lm(y[1:100] ~ X[1:100, ])
+m.lasso.cv <- cv.glmnet(X[1:100, ], y[1:100], alpha = 1) 
+plot(m.lasso.cv)
+```
+
+When the penalty gets too high,  the cross-validated model error increases. lasso does well with low lambda values indicating lasso does not help improve out-of-sample performance/generalizability. We will continue but in actual use this might give us pause to consider whether the lasso was really helping.
+
+Compare the OLS coefficients with those from the lasso.
+
+```{r}
+cbind(OLS = coef(m.ols), Lasso = coef(m.lasso.cv)[,1])
+```
+
+The OLS coefficients are noisier.  lasso predictor 5 is penalized to 0. In the simulated data the true coefficients are 3, 1, 1, 1, 1, and 0. The OLS estimates have much too low a value for the first predictor and much too high a value for the second where the lasso has more accurate values for each. 
+
+### L2
+
+The L2 penalty (ridge regression) is similar L1 penalty.  Instead of adding a penalty based on the sum of the absolute weights, the penalty is based on the *squared weights*. This has the effect of providing a varied penalty, with larger (positive or negative) weights resulting in a greater penalty. In the context of neural networks, this is sometimes referred to as *weight decay*. Note below aplha = 0 to ridge regression.
+
+```{r}
+m.ridge.cv <- cv.glmnet(X[1:100, ], y[1:100], alpha = 0)
+plot(m.ridge.cv)
+```
+
+When the penalty gets too high the cross-validated model error increases. As with lasso, ridge regression model does well with low lambda values indicating L2 penalty does not much help improve out-of-sample performance/generalizability. 
+
+Compare the OLS coefficients with those from the lasso and the ridge regression model.
+
+```{r}
+cbind(OLS = coef(m.ols), Lasso = coef(m.lasso.cv)[,1],  Ridge = coef(m.ridge.cv)[,1])
+```
+
+Ridge regression does not shrink the coefficient for the fifth predictor to exactly zero. It is smaller than OLS and the remaining parameters are all slightly shrunken but close to their true values of 3, 1, 1, 1, 1, and 0. 
+
+### L2 in Neural Net
+
+```{r recreateData}
+#Recreate the data
+digits.train <- read.csv("./data/train.csv")
+digits.train$label <- factor(digits.train$label, levels = 0:9) 
+i <- 1:5000 
+digits.X <- digits.train[i, -1] #Do not want to trian with the label - duh!
+digits.y <- digits.train[i, 1]
+
+## try various weight decays and number of iterations 
+## register backend so that different decays can be 
+## estimated in parallel 
+cl <- makeCluster(2) 
+registerDoSNOW(cl)
+```
+
+Train neural network on the digit classification; vary the weight decay penalty at 0 (no penalty) and 0.10; loop through two sets of the number of iterations allowed: 100 or 150.
+
+```{r eval=FALSE}
+set.seed(1234)
+digits.decay.m1 <- lapply(c(100, 150), function(its) {
+     train(digits.X, digits.y, method = "nnet", tuneGrid = expand.grid(.size = c(10), .decay = c(0, .1)),
+           trControl = trainControl(method = "cv", number = 5, repeats = 1), MaxNWts = 10000, maxit = its)
+     })
+```
+```{r echo=FALSE, }
+#save(digits.decay.m1, file="../Essentials/digitsdecaym1.RData")
+load("../Essentials/digitsdecaym1.RData")
+digits.decay.m1[[1]] 
+```
+
+When limited to 100 iterations, the nonregularized model (Accuracy = 0.63) outperforms the regularized model (Accuracy = 0.60) based on cross-validated results (although neither is doing well absolutely, particularly on this data):
+
+Examine the model with 150 iterations and see whether the regularized or non-regularized model performs better
+
+```{r}
+digits.decay.m1[[2]]
+```
+
+The model with more iterations outperforms the model with fewer iterations, regardless of the regularization. However, comparing both models with 150 iterations, the regularized model is superior (Accuracy = 0.66) to the non-regularized model (Accuracy = 0.65), although here the difference is relatively small. These results highlight the point that *regularization is often most helpful with more complex models that have greater flexibility to fit (and overfit) the data, and that (in models that are appropriate or overly simplistic for the data) regularization may actually decrease performance*.
+
+### Ensembles & Model Averaging
+
+As with the previous regularization methods, model averaging is a simple concept. If you have different models that each generate a set of predictions, each model may make errors in its predictions but they might not all make the same errors. Where one model predicts too high a value, another may predict one that's low. If averaged, some of the errors cancel out resulting in a more accurate prediction than would have been otherwise obtained.
+
+Consider a couple of different but extreme examples. 
+
+- Suppose that the models being averaged are identical or at least generate identical predictions (that is, perfectly correlated). Here, the average will result in no benefit. 
+- Suppose that the models being averaged each independently perform equally well and their predictions are uncorrelated (or have very low correlations). Then the average will be far more accurate as it gains the strengths of each model. 
+
+The following code gives an example using simulated data. In this small example, we have three models to illustrate the point concepts.
+
+```{r}
+set.seed(1234) 
+d <- data.frame(x = rnorm(400)) 
+d$y <- with(d, rnorm(400, 2 + ifelse(x < 0, x + x^2, x + x^2.5), 1)) 
+d.train <- d[1:200, ] 
+d.test <- d[201:400, ]
+
+## three different models 
+m1 <- lm(y ~ x, data = d.train) 
+m2 <- lm(y ~ I(x^2), data = d.train) 
+m3 <- lm(y ~ pmax(x, 0) + pmin(x, 0), data = d.train)
+
+## In sample R2 
+cbind(M1 = summary(m1)$r.squared, M2 = summary(m2)$r.squared, M3 = summary(m3)$r.squared)
+```
+
+The predictive value of each model, at least in the training data, varies quite a bit. Evaluating the correlations among fitted values in the training data can also help to indicate how much overlap there is among the model predictions.
+
+```{r}
+## correlations in the training data 
+cor(cbind(M1 = fitted(m1), M2 = fitted(m2), M3 = fitted(m3)))
+```
+
+Generate predicted values for the testing data, the average of the predicted values, and correlate the predictions.
+
+```{r}
+## generate predictions and the average prediction 
+d.test$yhat1 <- predict(m1, newdata = d.test) 
+d.test$yhat2 <- predict(m2, newdata = d.test) 
+d.test$yhat3 <- predict(m3, newdata = d.test) 
+d.test$yhatavg <- rowMeans(d.test[, paste0("yhat", 1:3)])
+
+## correlation in the testing data 
+cor(d.test)
+```
+
+The average of the three models' predictions performs better than any of the models individually. (0.907 > others y) However, this is only true when each model performs similarly well. Consider a pathological case where one model predicts the outcome perfectly and another is random noise that is completely uncorrelated with the outcome. In this case, averaging the two would certainly result in worse performance than just using the good model. It is good practice:
+
+1. Check the models being averaged have similar performance, at least in the training data. 
+2. Given models with similar performance, it is desirable to have lower correlations between model predictions, as this will result in the best performing average.
+
+### Ensemble Methods and Bagging
+
+Ensemble methods are methods that employ model averaging. One common technique is known as bootstrap aggregating, where the data is sampled with replacement to form equally sized datasets, a model is trained on each, and then these results are averaged. Because the data is sampled with replacement, some cases may show up multiple times or not at all in each dataset. Because a model is trained on each dataset, if a particular variation is unique to just a few cases or a rare quirk of the data, it may only emerge in one model; when the predictions are averaged across many models trained on each of the resampled datasets, such overfitting will tend to be reduced. This process is known as bagging (bootstrap aggregating). 
+
+Bagging and model averaging is not used as frequently in deep neural networks because the computational cost of training each model can be quite high and thus repeating the process many times becomes prohibitively expensive in terms of time and compute resources. 
+
+The dropout process serves a very similar function to the way many subset models are trained, by dropping specific neurons, and then the results of these models are averaged. 
+
+###  Out-of-Sample Performance with Dropout
+
+Dropout is simple in concept.   During the training of the model, units (inputs, hidden neurons) are probabilistically dropped along with all connections to and from them.  Dropout forces models to be more robust to perturbations. Although many neurons are included in the full model, during training they are not all simultaneously present, and so neurons must operate somewhat more independently than they would have to otherwise.
+
+Use `nn.train()` from  `deepnet` because it allows for dropout. 
+
+- Run the four models in parallel 
+- Compare four models, two with and two without dropout regularization and with either 40 or 80 hidden neurons. 
+- Specify the proportion to dropout separately for the hidden and visible units. Based on the rule of thumb that ~50% of hidden units (and 80% of observed units) should be kept, specify the dropout proportions at .5 and .2, respectively.
+
+```{r echo=FALSE}
+try(lapply(paste('package:',names(sessionInfo()$otherPkgs),sep=""), detach,character.only=TRUE,unload=TRUE), silent = TRUE)
+if(!require(easypackages)){
+    install.packages("easypackages")
+    library(easypackages)
+}
+packages("parallel", "foreach", "doSNOW", "caret", "nnet", "deepnet", "RSNNS", prompt = FALSE)
+```
+```{r eval=FALSE}
+Fit Models
+nn.models <- foreach(i = 1:4, .combine = 'c') %dopar% {
+     set.seed(1234)
+     list(deepnet::nn.train(x = as.matrix(digits.X), y = model.matrix(~ 0 + digits.y), hidden = c(40, 80, 40, 80)[i], activationfun = "tanh",
+                   learningrate = 0.8, momentum = 0.5, numepochs = 150, output = "softmax", hidden_dropout = c(0, 0, .5, .5)[i],
+                   visible_dropout = c(0, 0, .2, .2)[i]))
+}
+save(nn.models, file="../Essentials/nnmodels.RData")
+```
+```{r ecgo=FALSE}
+load("../Essentials/nnmodels.RData")
+```
+
+Loop through the models and obtain predicted values and get the overall model performance.
+
+```{r}
+nn.yhat <- lapply(nn.models, function(obj) {encodeClassLabels(nn.predict(obj, as.matrix(digits.X))) })
+perf.train <- do.call(cbind, lapply(nn.yhat, function(yhat) {caret::confusionMatrix(xtabs(~ I(yhat - 1) + digits.y))$overall })) 
+colnames(perf.train) <- c("N40", "N80", "N40_Reg", "N80_Reg")
+options(digits = 4) 
+perf.train
+```
+
+The 40-neuron model performs better with regularization than without it, but that the 80-neuron model performs better without regularization than with regularization. Of course the real test comes on the testing or hold out data.
+
+```{r}
+i2 <- 5001:10000 
+test.X <- digits.train[i2, -1] 
+test.y <- digits.train[i2, 1]
+nn.yhat.test <- lapply(nn.models, function(obj) {encodeClassLabels(nn.predict(obj, as.matrix(test.X))) })
+perf.test <- do.call(cbind, lapply(nn.yhat.test, function(yhat) {caret::confusionMatrix(xtabs(~ I(yhat - 1) + test.y))$overall })) 
+colnames(perf.test) <- c("N40", "N80", "N40_Reg", "N80_Reg")
+perf.test
+```
+
+The testing data highlights in the non-regularized model, the additional neurons do not meaningfully improve the performance of the model on the testing data. The in-sample performance was overly optimistic (Accuracy = 0.9546 versus Accuracy = 0.8684 for the 80-neuron, non-regularized model in training and testing data). We see the advantage of the regularized models for both the 40- and the 80-neuron models. Although both still perform worse in the testing data than they did in the training data, they perform better than the equivalent non-regularized models in the testing data. This difference is particularly important for the 80-neuron model as there is a 0.0862 drop in overall accuracy from training to testing data, but in the regularized model the drop is only 0.0382, resulting in the regularized 80-neuron model having the best overall performance. 
+
+This shows the value of using dropout, or regularization more generally, and how one might go about trying to tune the model and dropout parameters to improve the ultimate testing performance. 
