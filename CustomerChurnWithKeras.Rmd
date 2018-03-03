@@ -1,0 +1,663 @@
+---
+title: "Customer Churn with Keras"
+output:
+  rmdformats::readthedown:
+    highlight: pygments
+    code_folding: hide
+---
+
+<style type="text/css">
+p{ /* Normal  */
+   font-size: 12px;
+}
+body{ /* Normal  */
+   font-size: 12px;
+}
+td {  /* Table  */
+   font-size: 10px;
+}
+h1 { /* Header 1 */
+ font-size: 26px;
+ color: #4294ce;
+}
+h2 { /* Header 2 */
+ font-size: 22px;
+}
+h3 { /* Header 3 */
+ font-size: 18px;
+}
+code.r{ /* Code block */
+  font-size: 10px;
+}
+pre { /* Code block */
+  font-size: 10px
+}
+#table-of-contents h2 {
+background-color: #4294ce;
+}
+#table-of-contents{
+background: #688FAD;
+}
+#nav-top span.glyphicon{
+color: #4294ce;
+}
+#postamble{
+background: #4294ce;
+border-top: ;
+}
+</style>
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+if(!require(easypackages)){install.packages("easypackages")}
+library(easypackages)
+packages("keras", "lime", "tidyquant", "rsample", "recipes", "yardstick", "corrr", "readr", prompt = FALSE)
+```
+
+http://www.business-science.io/business/2017/11/28/customer_churn_analysis_keras.html
+
+# Get Data
+
+The dataset used for this tutorial is IBM Watson Telco Dataset. According to IBM, the business challenge is…
+
+> A telecommunications company [Telco] is concerned about the number of customers leaving their landline business for cable competitors. They need to understand who is leaving. Imagine that you’re an analyst at this company and you have to find out who is leaving and why.
+
+The dataset includes information about:
+
+- Customers who left within the last month: The column is called Churn
+- Services that each customer has signed up for: phone, multiple lines, internet, online security, online backup, device protection, tech support, and streaming TV and movies
+- Customer account information: how long they’ve been a customer, contract, payment method, paperless billing, monthly charges, and total charges
+- Demographic info about customers: gender, age range, and if they have partners and dependents
+
+```{r}
+myData <- read_csv("~/GitHub/DeepLearning/data/Waston-Telco-Churn.csv")
+glimpse(myData)
+```
+
+# Preprocess Data
+
+## Prune The Data
+The data has a few columns and rows to remove:
+
+- The “customerID” column is a unique identifier for each observation that isn’t needed for modeling. We can de-select this column.
+0 The data has 11 NA values all in the “TotalCharges” column. Because it’s such a small percentage of the total population (99.8% complete cases), we can drop these observations with the drop_na() function from tidyr. Note that these may be customers that have not yet been charged, and therefore an alternative is to replace with zero or -99 to segregate this population from the rest.
+- Move the target to the first column 
+
+```{r pruneData}
+# Remove unnecessary data
+churn_data_tbl <- myData %>% select(-customerID) %>% drop_na() %>% select(Churn, everything())
+    
+glimpse(churn_data_tbl)
+```
+
+## Split Into Train/Test Sets
+
+Use a new package, `rsample`, which is very useful for sampling methods. It has the `initial_split()` function for splitting data sets into training and testing sets. The return is a special rsplit object.
+
+```{r splitData}
+# Split test/training sets
+set.seed(100)
+train_test_split <- initial_split(churn_data_tbl, prop = 0.8)
+train_test_split
+```
+
+We can retrieve our training and testing sets using `training()` and `testing()` functions.
+
+```{r}
+# Retrieve train and test sets
+train_tbl <- training(train_test_split)
+test_tbl  <- testing(train_test_split) 
+```
+
+# Data Exploration
+
+Answer the question, “What steps are needed to prepare for ML?” The key concept is knowing what transformations are needed to run the algorithm most effectively. Artificial Neural Networks are best when the data is one-hot encoded, scaled and centered. In addition, other transformations may be beneficial as well to make relationships easier for the algorithm to identify. 
+
+## Discretize The “tenure” Feature
+
+Numeric features like age, years worked, length of time in a position can generalize a group (or cohort). `TotalCharges` and `tenure` are numeric features that can be discretized into groups.
+
+> Pro Tip
+
+A quick test is to see if the log transformation increases the magnitude of the correlation between `TotalCharges` and `Churn`. 
+
+- `correlate()` Performs tidy correlations on numeric data
+- `focus()`: Similar to select(). Takes columns and focuses on only the rows/columns of importance.
+- `fashion()`: Makes the formatting aesthetically easier to read.
+
+```{r corrTest}
+# Determine if log transformation improves correlation 
+# between TotalCharges and Churn
+train_tbl %>% select(Churn, TotalCharges) %>% mutate(Churn = Churn %>% as.factor() %>% as.numeric(),
+        LogTotalCharges = log(TotalCharges)) %>% correlate() %>% focus(Churn) %>% fashion()
+```
+
+The correlation between `Churn` and `LogTotalCharges` is greatest in magnitude indicating the log transformation should improve the accuracy of the ANN model we build. Therefore, we should perform the log transformation.
+
+## One-Hot Encoding
+
+One-hot encoding is the process of converting categorical data to sparse data which has columns of only zeros and ones (this is also called creating “dummy variables”). All non-numeric data will need to be converted to dummy variables. This is simple for binary Yes/No data because we can simply convert to 1’s and 0’s. It becomes slightly more complicated with multiple categories, which requires creating new columns of 1s and 0s for each category (actually one less). There are 4 features that are multi-category: `Contract`, `Internet Service`, `Multiple Lines`, and `Payment Method`.
+
+## Feature Scaling
+
+ANN’s typically perform faster and often times with higher accuracy when the features are scaled and/or normalized (aka centered and scaled, also known as standardizing). Because ANNs use gradient descent, weights tend to update faster. 
+
+Several examples when feature scaling is important are:
+
+- k-nearest neighbors with an Euclidean distance measure if want all features to contribute equally
+- k-means (see k-nearest neighbors)
+- logistic regression, SVMs, perceptrons, neural networks etc. if you are using gradient descent/ascent-based optimization, otherwise some weights will update much faster than others
+- linear discriminant analysis, principal component analysis, kernel principal component analysis since you want to find directions of maximizing the variance (under the constraints that those directions/eigenvectors/principal components are orthogonal); you want to have features on the same scale since you’d emphasize variables on “larger measurement scales” more. **When in doubt, standardize the data**.
+
+# Preprocessing With Recipes
+
+Implement the preprocessing steps/transformations with a new package `recipes`, which makes creating ML data preprocessing workflows simple It is worth learning.
+
+## Step 1: Create A Recipe
+
+A “recipe” is nothing more than a series of steps to perform on the training, testing and/or validation sets. It does not do anything other than create the playbook for baking.
+
+Use `recipe()`  to implement the preprocessing steps. The function takes a familiar object argument, which is a modeling function such as `object = Churn ~ .` meaning “Churn” is the outcome (aka response, predictor, target) and all other features are predictors. The function also takes the `data` argument, which gives the “recipe steps” perspective on how to apply during baking (next).
+
+A recipe is not very useful until “steps” are added which are used to transform the data during baking. The package contains a number of useful “step functions” that can be applied. For this model, use:
+
+- `step_discretize()` with the `option = list(cuts = 6)` to cut the continuous variable for `tenure` (number of years as a customer) to group customers into cohorts
+- `step_log()` to log transform `TotalCharges`
+- `step_dummy()` to one-hot encode the categorical data. Note that this adds columns of one/zero for categorical data with three or more categories
+- `step_center()` to mean-center the data
+- `step_scale()` to scale the data
+
+The last step is to prepare the recipe with  `prep()`. This step is used to “estimate the required parameters from a training set that can later be applied to other data sets”. This is important for centering and scaling and other functions that use parameters defined from the training set.
+
+```{r}
+# Create recipe
+rec_obj <- recipe(Churn ~ ., data = train_tbl) %>%
+    step_discretize(tenure, options = list(cuts = 6)) %>%
+    step_log(TotalCharges) %>%
+    step_dummy(all_nominal(), -all_outcomes()) %>%
+    step_center(all_predictors(), -all_outcomes()) %>%
+    step_scale(all_predictors(), -all_outcomes()) %>%
+    prep(data = train_tbl)
+```
+
+> Can print the recipe object if the steps were used to prepare the data are forgotten. Consider saving the recipe object as an RDS file using saveRDS(), and then use it to bake() future raw data into ML-ready data in production.
+
+```{r}
+# Print the recipe object
+rec_obj
+```
+
+## Step 2: Baking With the Recipe
+
+Apply the “recipe” to any data set with the `bake()` function.  It processes the data following the recipe steps. Apply to training and testing data to convert from raw data to a machine learning dataset. 
+
+```{r bakeRecipie}
+# Predictors
+x_train_tbl <- bake(rec_obj, newdata = train_tbl)
+x_test_tbl  <- bake(rec_obj, newdata = test_tbl)
+
+glimpse(x_train_tbl)
+```
+
+## Step 3: The Target
+
+Store the actual values (truth) as `y_train_vec` and `y_test_vec` which are needed for modeling our ANN. Convert to a series of numeric ones and zeros which can be accepted by the Keras ANN modeling functions. Add “vec” to the name to remember the class of the object.
+
+```{r target}
+# Response variables for training and testing sets
+y_train_vec <- ifelse(pull(train_tbl, Churn) == "Yes", 1, 0)
+y_test_vec  <- ifelse(pull(test_tbl, Churn) == "Yes", 1, 0)
+```
+
+# Model Customer Churn With Keras 
+
+Recommend the link below for review of neural networks and deep learning:
+https://www.xenonstack.com/blog/overview-of-artificial-neural-networks-and-its-applications
+
+This is a good resource for learning more about deep learning with R:
+http://www.rblog.uni-freiburg.de/2017/02/07/deep-learning-in-r/
+
+## Building A Deep Learning Model
+
+Bild a special class of ANN called a Multi-Layer Perceptron (MLP). MLPs are one of the simplest forms of deep learning, but they are both highly accurate and serve as a jumping-off point for more complex algorithms. MLPs are quite versatile as they can be used for regression, binary and multi classification (and are typically quite good at classification problems).
+
+Build a three layer MLP with Keras. This is the process:
+
+1. Initialize a sequential model: The first step is to initialize a sequential model with `keras_model_sequential()` which is the beginning of our Keras model. The sequential model is composed of a linear stack of layers.
+2. Apply layers to the sequential model: Layers consist of the input layer, hidden layers and an output layer. The input layer is the data and provided it’s formatted correctly there’s nothing more to discuss. The hidden layers and output layers are what controls the ANN inner workings.
+    - Hidden Layers: Hidden layers form the neural network nodes that enable non-linear activation using weights. The hidden layers are created using `layer_dense()`. Add two hidden layers. Apply units = 16, which is the number of nodes. Select kernel_initializer = "uniform" and activation = "relu" for both layers. The first layer needs to have the input_shape = 35, which is the number of columns in the training set. Key Point: While arbitrarily selecting the number of hidden layers, units, kernel initializers and activation functions, these parameters can be optimized through a process called hyperparameter tuning that is discussed in Next Steps.
+    - Dropout Layers: Dropout layers are used to control overfitting. This eliminates weights below a cutoff threshold to prevent low weights from overfitting the layers. We use the layer_dropout() function add two drop out layers with rate = 0.10 to remove weights below 10%.
+    - Output Layer: The output layer specifies the shape of the output and the method of assimilating the learned information. The output layer is applied using the layer_dense(). For binary values, the shape should be units = 1. For multi-classification, the units should correspond to the number of classes. We set the kernel_initializer = "uniform" and the activation = "sigmoid" (common for binary classification).
+3. Compile the model: The last step is to compile the model with compile(). Use optimizer = "adam", which is one of the most popular optimization algorithms. We select loss = "binary_crossentropy" since this is a binary classification problem. We’ll select metrics = c("accuracy") to be evaluated during training and testing. Key Point: The optimizer is often included in the tuning process.
+
+Codify the discussion above to build the Keras MLP-flavored ANN model.
+
+```{r buildKeras}
+# Building our Artificial Neural Network
+model_keras <- keras_model_sequential()
+
+model_keras %>% 
+    # First hidden layer
+    layer_dense(
+        units              = 16, 
+        kernel_initializer = "uniform", 
+        activation         = "relu", 
+        input_shape        = ncol(x_train_tbl)) %>% 
+    # Dropout to prevent overfitting
+    layer_dropout(rate = 0.1) %>%
+    # Second hidden layer
+    layer_dense(
+        units              = 16, 
+        kernel_initializer = "uniform", 
+        activation         = "relu") %>% 
+    # Dropout to prevent overfitting
+    layer_dropout(rate = 0.1) %>%
+    # Output layer
+    layer_dense(
+        units              = 1, 
+        kernel_initializer = "uniform", 
+        activation         = "sigmoid") %>% 
+    # Compile ANN
+    compile(
+        optimizer = 'adam',
+        loss      = 'binary_crossentropy',
+        metrics   = c('accuracy')
+    )
+model_keras
+```
+
+Use `fit()` to run the ANN on thew training data. The object is the model, and x and y are  training data in matrix and numeric vector forms, respectively. The batch_size = 50 sets the number samples per gradient update within each epoch. Set epochs = 35 to control the number training cycles. Typically want to keep the batch size high since this decreases the error within each training cycle (epoch). Also want epochs to be large, which is important in visualizing the training history (discussed below). Set `validation_split = 0.30` to include 30% of the data for model validation which prevents overfitting. 
+
+```{r modelFit}
+# Fit the keras model to the training data
+fit_keras <- fit(
+    object           = model_keras, 
+    x                = as.matrix(x_train_tbl), 
+    y                = y_train_vec,
+    batch_size       = 50, 
+    epochs           = 35,
+    validation_split = 0.30
+    )
+```
+
+Inspect the final modelto make sure there is minimal difference between the validation accuracy and the training accuracy.
+
+```{r modelInspect}
+# Print the final model
+fit_keras
+```
+
+Visualize the Keras training history using `plot()`. Goal is to see is the validation accuracy and loss leveling off which means the model has completed training. There is some divergence between training loss/accuracy and validation loss/accuracy. This model indicates it could stop training at an earlier epoch. *Pro Tip: **Only use enough epochs to get a high validation accuracy**. Once validation accuracy curve begins to flatten or decrease, stop training.
+
+```{r plotTrainingHistory}
+# Plot the training/validation history of our Keras model
+plot(fit_keras) + theme_tq() + scale_color_tq() + scale_fill_tq() + labs(title = "Deep Learning Training Results")
+```
+
+## Predictions
+
+There are two functions to generate predictions:
+
+- `predict_classes`: Generates class values as a matrix of ones and zeros. Convert the output to a vector because this is a binary classification exercise.
+- `predict_proba`: Generates the class probabilities as a numeric matrix indicating the probability of being a class. Convert to a numeric vector because there is only one column output.
+
+```{r}
+# Predicted Class
+yhat_keras_class_vec <- predict_classes(object = model_keras, x = as.matrix(x_test_tbl)) %>% as.vector()
+
+# Predicted Class Probability
+yhat_keras_prob_vec  <- predict_proba(object = model_keras, x = as.matrix(x_test_tbl)) %>% as.vector()
+```
+
+# Inspect Performance With Yardstick
+
+`yardstick` package has a collection of handy functions for measuring performance of machine learning models. 
+
+First, get the data formatted for yardstick. Create a data frame with the truth (actual values as factors), estimate (predicted values as factors), and the class probability (probability of yes as numeric). Use `fct_recode()` function from `forcats` package to assist with recoding as Yes/No values.
+
+```{r}
+# Format test data and predictions for yardstick metrics
+estimates_keras_tbl <- tibble(
+    truth      = as.factor(y_test_vec) %>% fct_recode(yes = "1", no = "0"),
+    estimate   = as.factor(yhat_keras_class_vec) %>% fct_recode(yes = "1", no = "0"),
+    class_prob = yhat_keras_prob_vec
+)
+
+estimates_keras_tbl
+```
+
+Secondly set `options(yardstick.event_first = FALSE)`. As pointed out by ad1729 in GitHub Issue 13, the default is to classify 0 as the positive class instead of 1.
+
+```{r}
+options(yardstick.event_first = FALSE)
+```
+
+### Confusion Table
+
+Use `conf_mat()` function to get the confusion table. The model was by no means perfect, but it did a decent job of identifying customers likely to churn.
+
+```{r confusionTable}
+# Confusion Table
+estimates_keras_tbl %>% conf_mat(truth, estimate)
+```
+
+### Accuracy
+Use `metrics()` function to get an accuracy measurement from the test set. Results roughly 82% accuracy.
+
+```{r accuracy}
+# Accuracy
+estimates_keras_tbl %>% metrics(truth, estimate)
+```
+
+### AUC
+
+Get the ROC Area Under the Curve (AUC) measurement. AUC is often a good metric used to compare different classifiers and to compare to randomly guessing (AUC_random = 0.50). This model has AUC = 0.85, which is much better than randomly guessing. Tuning and testing different classification algorithms may yield even better results.
+
+```{r AUC}
+# AUC
+estimates_keras_tbl %>% roc_auc(truth, class_prob)
+```
+
+### Precision And Recall
+
+Precision is when the model predicts “yes”, how often is it actually “yes”. Recall (also true positive rate or specificity) is when the actual value is “yes” how often is the model correct. Get `precision()` and `recall()` measurements using `yardstick`.
+
+```{r precisionRecall}
+# Precision
+tibble(
+    precision = estimates_keras_tbl %>% precision(truth, estimate),
+    recall    = estimates_keras_tbl %>% recall(truth, estimate)
+)
+```
+
+Precision and recall are very important to the business case: The organization is concerned with balancing the cost of targeting and retaining customers at risk of leaving with the cost of inadvertently targeting customers that are not planning to leave (and potentially decreasing revenue from this group). The threshold above which to predict Churn = “Yes” can be adjusted to optimize for the business problem. This becomes an Customer Lifetime Value optimization problem that is discussed further in Next Steps.
+
+### F1 Score
+
+Get the F1-score which is a weighted average between the precision and recall. Machine learning classifier thresholds are often adjusted to maximize the F1-score. However, this is often not the optimal solution to the business problem.
+
+```{r f1}
+# F1-Statistic
+estimates_keras_tbl %>% f_meas(truth, estimate, beta = 1)
+```
+
+# Explain The Model With LIME
+
+LIME stands for *Local Interpretable Model-agnostic Explanations* and is a method for explaining black-box machine learning model classifiers. For those new to LIME, this [YouTube video](https://youtu.be/hUnRCxnydCc) does a really nice job explaining how LIME helps to identify feature importance with black box machine learning models (e.g. deep learning, stacked ensembles, random forest).
+
+## LIME Setup
+
+`lime` package implements LIME in R. **It is not setup out-of-the-box to work with keras**. However, with a few functions it can work after making2 custom functions. 
+
+- model_type: Used to tell lime what type of model we are dealing with. It could be classification, regression, survival, etc.
+- predict_model: Used to let `lime` to perform predictions that its algorithm can interpret
+
+First tidentify the class of our model object using `class()` function.
+
+```{r classFunc}
+class(model_keras)
+```
+
+Create using `model_type()` function. It’s only input is x the keras model. The function simply returns “classification”, which tells LIME the model is classifying.
+
+```{r modelType}
+# Setup lime::model_type() function for keras
+model_type.keras.models.Sequential <- function(x, ...) {
+    return("classification")
+}
+```
+
+Now create `predict_model()` function, which wraps `keras::predict_proba()`. The trick here is to realize that it’s inputs must be `x` a model, `newdata` a dataframe object (this is important), and `type` which is not used but can be use to switch the output type. 
+The output is tricky because it must be in the format of probabilities by classification (this is important; shown next).
+
+```{r}
+# Setup lime::predict_model() function for keras
+predict_model.keras.models.Sequential <- function(x, newdata, type, ...) {
+    pred <- predict_proba(object = x, x = as.matrix(newdata))
+    return(data.frame(Yes = pred, No = 1 - pred))
+}
+```
+
+Run this next script to show you what the output looks like and to test the `predict_model()` function. See how it’s the probabilities by classification. It must be in this form for model_type = "classification".
+
+```{r}
+# Test our predict_model() function
+predict_model(x = model_keras, newdata = x_test_tbl, type = 'raw') %>%  tibble::as_tibble()
+```
+
+Create an `explainer` using the `lime()` function. Pass the training data set without the “Attribution column”. The form must be a data frame, which is OK since the `predict_model` function will switch it to an `keras` object. Set `model = automl_leader` our leader model, and `bin_continuous = FALSE`. Could tell the algorithm to bin continuous variables but this may not make sense for categorical numeric data that we didn’t change to factors.
+
+```{runLIME}
+# Run lime() on training set
+explainer <- lime::lime(x = x_train_tbl, model = model_keras, bin_continuous = FALSE)
+```
+ 
+Run the `explain()` function, which returns the explanation. This can take so limit it to just the first ten rows of the test data set. `set n_labels = 1` because we aret explaining a single class. Setting `n_features = 4` returns the top four features that are critical to each case. Finally, setting `kernel_width = 0.5` ncreases the “model_r2” value by shrinking the localized evaluation.
+
+```{r}
+# Run explain() on explainer
+explanation <- lime::explain(x_test_tbl[1:10,], explainer = explainer, n_labels = 1, n_features = 4, kernel_width = 0.5)
+```
+
+## Feature Importance Visualization
+
+The importance plot visualizes each of the first ten cases (observations) from the test data. The top four features for each case are shown. Note that they are not the same for each case. The green bars mean that the feature supports the model conclusion and the red bars contradict. A few important features based on frequency in first ten cases:
+
+- Tenure (7 cases)
+- enior Citizen (5 cases)
+- Online Security (4 cases)
+
+```{r importancePlot}
+plot_features(explanation) + labs(title = "LIME Feature Importance Visualization",
+         subtitle = "Hold Out (Test) Set, First 10 Cases Shown")
+```
+
+Another excellent visualization can be performed using `plot_explanations()` which produces a facetted heatmap of all case/label/feature combinations. It’s a more condensed version of `plot_features()` but be careful because it does not provide exact statistics and it makes it less easy to investigate binned features (Notice that “tenure” would not be identified as a contributor even though it shows up as a top feature in 7 of 10 cases).
+
+```{r importancePlot2}
+plot_explanations(explanation) + labs(title = "LIME Feature Importance Heatmap",
+         subtitle = "Hold Out (Test) Set, First 10 Cases Shown")
+```
+
+Validate With Correlation
+
+With the LIME visualization only a sample of the data is used. Therefore, it gives a limited understanding of how the ANN works. 
+
+Perform a correlation analysis on the training set to understand what features correlate globally to “Churn”. Use `corrr` to perform tidy correlations with `correlate()`.
+
+```{corrAnalysis}
+# Feature correlations to Churn
+corrr_analysis <- x_train_tbl %>%
+    mutate(Churn = y_train_vec) %>%
+    correlate() %>%
+    focus(Churn) %>%
+    rename(feature = rowname) %>%
+    arrange(abs(Churn)) %>%
+    mutate(feature = as_factor(feature)) 
+corrr_analysis
+```
+
+The correlation visualization helps in distinguishing which features are relavant to Churn.
+
+```{r corrVisualization}
+# Correlation visualization
+corrr_analysis %>%
+    ggplot(aes(x = Churn, y = fct_reorder(feature, desc(Churn)))) +
+    geom_point() +
+    # Positive Correlations - Contribute to churn
+    geom_segment(aes(xend = 0, yend = feature), 
+                 color = palette_light()[[2]], 
+                 data = corrr_analysis %>% filter(Churn > 0)) +
+    geom_point(color = palette_light()[[2]], 
+               data = corrr_analysis %>% filter(Churn > 0)) +
+    # Negative Correlations - Prevent churn
+    geom_segment(aes(xend = 0, yend = feature), 
+                 color = palette_light()[[1]], 
+                 data = corrr_analysis %>% filter(Churn < 0)) +
+    geom_point(color = palette_light()[[1]], 
+               data = corrr_analysis %>% filter(Churn < 0)) +
+    # Vertical lines
+    geom_vline(xintercept = 0, color = palette_light()[[5]], size = 1, linetype = 2) +
+    geom_vline(xintercept = -0.25, color = palette_light()[[5]], size = 1, linetype = 2) +
+    geom_vline(xintercept = 0.25, color = palette_light()[[5]], size = 1, linetype = 2) +
+    # Aesthetics
+    theme_tq() +
+    labs(title = "Churn Correlation Analysis",
+         subtitle = "Positive Correlations (contribute to churn), Negative Correlations (prevent churn)",
+         y = "Feature Importance")
+```
+
+The correlation analysis helps quickly disseminate which features that the LIME analysis may be excluding. The following features are highly correlated (magnitude > 0.25):
+
+**Increases Likelihood of Churn (Red)**:
+
+- Tenure = Bin 1 (<12 Months)
+- Internet Service = “Fiber Optic”
+- Payment Method = “Electronic Check”
+
+**Decreases Likelihood of Churn (Blue)**:
+
+- Contract = “Two Year”
+- Total Charges (Note that this may be a biproduct of additional services such as Online Security)
+
+# Feature Investigation
+
+Investigate features that are most frequent in the LIME feature importance visualization along with those that the correlation analysis shows an above normal magnitude. 
+
+-Tenure (7/10 LIME Cases, Highly Correlated)
+-Contract (Highly Correlated)
+--Internet Service (Highly Correlated)
+-Payment Method (Highly Correlated)
+-Senior Citizen (5/10 LIME Cases)
+-Online Security (4/10 LIME Cases)
+
+## Tenure (7/10 LIME Cases, Highly Correlated)
+
+LIME cases indicate that the ANN model is using this feature frequently and high correlation agrees that this is important. Investigating the feature distribution, it appears that customers with lower tenure (bin 1) are more likely to leave. **Opportunity**: Target customers with less than 12 month tenure.
+
+```{r}
+# Tenure
+churn_data_raw %>%
+ggplot(aes(x = Churn, y = tenure)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Tenure",
+subtitle = "Customers with lower tenure are more likely to leave"
+)
+```
+
+## Contract (Highly Correlated)
+
+While LIME did not indicate this as a primary feature in the first 10 cases, the feature is clearly correlated with those electing to stay. Customers with one and two year contracts are much less likely to churn. **Opportunity**: Offer promotion to switch to long term contracts.
+
+```{r}
+# Contract
+churn_data_raw %>%
+mutate(Churn = ifelse(Churn == "Yes", 1, 0)) %>%
+ggplot(aes(x = as.factor(Contract), y = Churn)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Contract Type",
+subtitle = "Two and one year contracts much less likely to leave",
+x = "Contract"
+)
+```
+
+## Internet Service (Highly Correlated)
+
+While LIME did not indicate this as a primary feature in the first 10 cases, the feature is clearly correlated with those electing to stay. Customers with fiber optic service are more likely to churn while those with no internet service are less likely to churn. **Improvement Area**: Customers may be dissatisfied with fiber optic service.
+
+```{r}
+# Internet Service
+churn_data_raw %>%
+mutate(Churn = ifelse(Churn == "Yes", 1, 0)) %>%
+ggplot(aes(x = as.factor(InternetService), y = Churn)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Internet Service",
+subtitle = "Fiber optic more likely to leave",
+x = "Internet Service"
+)
+```
+
+## Payment Method (Highly Correlated)
+
+While LIME did not indicate this as a primary feature in the first 10 cases, the feature is clearly correlated with those electing to stay. Customers with electronic check are more likely to leave. **Opportunity**: Offer customers a promotion to switch to automatic payments.
+
+```{r}
+# Payment Method
+churn_data_raw %>%
+mutate(Churn = ifelse(Churn == "Yes", 1, 0)) %>%
+ggplot(aes(x = as.factor(PaymentMethod), y = Churn)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Payment Method",
+subtitle = "Electronic check more likely to leave",
+x = "Payment Method"
+)
+```
+
+## Senior Citizen (5/10 LIME Cases)
+
+Senior citizen appeared in several of the LIME cases indicating it was important to the ANN for the 10 samples. However, it was not highly correlated to Churn, which may indicate that the ANN is using in an more sophisticated manner (e.g. as an interaction). It’s difficult to say that senior citizens are more likely to leave, but non-senior citizens appear less at risk of churning. **Opportunity**: Target users in the lower age demographic.
+
+```{r}
+# Senior Citizen
+churn_data_raw %>%
+mutate(Churn = ifelse(Churn == "Yes", 1, 0)) %>%
+ggplot(aes(x = as.factor(SeniorCitizen), y = Churn)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Senior Citizen",
+subtitle = "Non-senior citizens less likely to leave",
+x = "Senior Citizen (Yes = 1)"
+)
+```
+
+## Online Security (4/10 LIME Cases)
+
+Customers that did not sign up for online security were more likely to leave while customers with no internet service or online security were less likely to leave. **Opportunity**: Promote online security and other packages that increase retention rates.
+
+```{r}
+# Online Security
+churn_data_raw %>%
+mutate(Churn = ifelse(Churn == "Yes", 1, 0)) %>%
+ggplot(aes(x = OnlineSecurity, y = Churn)) +
+geom_jitter(alpha = 0.25, color = palette_light()[[6]]) +
+geom_violin(alpha = 0.6, fill = palette_light()[[1]]) +
+theme_tq() +
+labs(
+title = "Online Security",
+subtitle = "Customers without online security are more likely to leave"
+)
+```
+
+# Next Steps
+
+## Customer Lifetime Value
+
+Needs to see the financial benefit tieing the analysis to sales, profitability or ROI. Customer Lifetime Value (CLV) is a methodology that ties the business profitability to the retention rate. A full customer churn analysis would tie the churn to an classification cutoff (threshold) optimization to maximize the CLV with the predictive ANN model.
+
+## ANN Performance Evaluation and Improvement
+
+The ANN model is good, but it could be better. Test or implement:
+
+-K Fold Cross-Fold Validation: Used to obtain bounds for accuracy estimates.
+- Hyper Parameter Tuning: Used to improve model performance by searching for the best parameters possible.
+
+## Distributing Analytics
+It’s critical to communicate data science insights to decision makers in the organization. Most decision makers in organizations are not data scientists, but these individuals make important decisions on a day-to-day basis. A PowerBI application might include a Customer Scorecard to monitor customer health (risk of churn). The application would walk the user through the machine learning journey for how the model was developed, what it means to stakeholders, and how it can be used in production.
+
+# Conclusion
+
+Customer churn is an expensive problem. The good news is that machine learning can solve churn problems, making the organization more profitable in the process. Deep Learning was implemented to predict customer churn. Built an ANN model using the new `keras` package that achieved 82% predictive accuracy (without tuning)! Used three new machine learning packages to help with preprocessing and measuring performance: `recipes`, `rsample` and `yardstick`. Also used `lime `to explain the Deep Learning model, which traditionally was impossible! Verified the LIME results with a Correlation Analysis, which brought to light other features to investigate. For the IBM Telco dataset, `tenure`, `contract type`, `internet service type`, `payment menthod`, `senior citizen status`, and `online security status` were useful in understanding customer churn.
