@@ -1,0 +1,163 @@
+---
+title: "Tensorflow – R"
+output:
+  prettydoc::html_pretty:
+    theme: Leonids
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE, 
+  fig.width = 8, fig.height = 6, out.width = "100%")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+setwd("~/R/Complete")
+if(!require(easypackages)){install.packages("easypackages")}
+library(easypackages)
+packages("tensorflow","keras",  "dplyr", "dummies", prompt = FALSE)
+```
+
+# Introduction
+
+Multivariate and Binary Classification models are illustrated below.
+
+# Multivariate Model - Parkinsons
+
+This code performs multivariate regression using `Tensorflow` and `keras` on the advent of Parkinson disease through sound recordings see [Parkinson Speech Dataset with Multiple Types of Sound Recordings Data Set](https://archive.ics.uci.edu/ml/datasets/Parkinson+Speech+Dataset+with++Multiple+Types+of+Sound+Recordings#). The clinician’s motorUPDRS score has to be predicted from the set of features.
+
+## Data
+
+Download the Parkinson's data from UCI Machine Learning repository
+
+```{r}
+parkinsons <- read.csv("https://archive.ics.uci.edu/ml/machine-learning-databases/parkinsons/telemonitoring/parkinsons_updrs.data")
+
+# Set the column names
+names(parkinsons) <- c("subject","age", "sex", "test_time", "motor_UPDRS", "total_UPDRS", "Jitter", "Jitter.Abs", "Jitter.RAP", "Jitter.PPQ5", "Jitter.DDP", "Shimmer", "Shimmer.dB",  "Shimmer.APQ3", "Shimmer.APQ5", "Shimmer.APQ11", "Shimmer.DDA", "NHR", "HNR", "RPDE",  "DFA", "PPE")
+
+# Remove the column 'subject' as it is not relevant to analysis
+parkinsons1 <- subset(parkinsons, select = -c(subject))
+
+# Make the column 'sex' as a factor for using dummies
+parkinsons1$sex=as.factor(parkinsons1$sex)
+# Add dummy variables for categorical cariable 'sex'
+parkinsons2 <- dummy.data.frame(parkinsons1, sep = ".")
+
+parkinsons3 <- na.omit(parkinsons2)
+
+## Split data 80% training and 20% test
+sample_size <- floor(0.8 * nrow(parkinsons3))
+
+## set the seed to make your partition reproducible
+set.seed(12)
+
+train_index <- sample(seq_len(nrow(parkinsons3)), size = sample_size)
+
+train_dataset <- parkinsons3[train_index, ]
+test_dataset <- parkinsons3[-train_index, ]
+
+train_data <- train_dataset %>% select(sex.0, sex.1,age,  test_time, Jitter, Jitter.Abs, Jitter.PPQ5, Jitter.DDP, Shimmer, Shimmer.dB, Shimmer.APQ3, Shimmer.APQ11, Shimmer.DDA, NHR, HNR, RPDE, DFA, PPE)
+
+train_labels <- select(train_dataset,motor_UPDRS)
+
+test_data <- test_dataset %>% select(sex.0, sex.1,age,  test_time, Jitter, Jitter.Abs, Jitter.PPQ5, Jitter.DDP, Shimmer, Shimmer.dB, Shimmer.APQ3, Shimmer.APQ11, Shimmer.DDA, NHR, HNR, RPDE, DFA, PPE)
+
+test_labels <- select(test_dataset,motor_UPDRS)
+
+# Normalize the data by subtracting the mean and dividing by the standard deviation
+normalize<-function(x) {
+  y<-(x - mean(x)) / sd(x)
+  return(y)
+}
+
+normalized_train_data <-apply(train_data,2,normalize)
+
+# Convert to matrix
+train_labels <- as.matrix(train_labels)
+normalized_test_data <- apply(test_data,2,normalize)
+test_labels <- as.matrix(test_labels)
+```
+
+# Model Development
+
+```{r}
+model <- keras_model_sequential()
+model %>% 
+  layer_dense(units = 6, activation = 'relu', input_shape = dim(normalized_train_data)[2]) %>%
+  layer_dense(units = 9, activation = 'relu') %>%
+  layer_dense(units = 6, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+# Set the metrics required to be Mean Absolute Error and Mean Squared Error.For regression, the loss is 
+# mean_squared_error
+model %>% compile(loss = 'mean_squared_error', optimizer = optimizer_rmsprop(),
+                  metrics = c('mean_absolute_error','mean_squared_error'))
+
+# Fit the model
+# Use the test data for validation
+history <- model %>% fit(normalized_train_data, train_labels, epochs = 30, batch_size = 128,
+                         validation_data = list(normalized_test_data,test_labels))
+```
+
+```{r}
+plot(history)
+```
+
+# Binary Classification - Breast Cancer
+
+This is a simple binary classification problem from UCI Machine Learning repository and deals with data on Breast cancer from the [Univ. of Wisconsin Breast Cancer Wisconsin (Diagnostic) Data Set](https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+%28Diagnostic%29).
+
+## Data
+```{r}
+# Read the data for Breast cancer (Wisconsin)
+breast <- read.csv("https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/breast-cancer-wisconsin.data")
+
+# Rename the columns
+names(breast) <- c("id", "thickness", "cellsize", "cellshape", "adhesion", "epicellsize",
+                    "barenuclei", "chromatin", "normalnucleoli", "mitoses", "class")
+
+# Remove the columns id and class
+breast1 <- subset(breast, select = -c(id, class))
+breast2 <- na.omit(breast1)
+
+# Convert the column to numeric
+breast2$barenuclei <- as.numeric(breast2$barenuclei)
+
+#Normalize the data
+train_data2 <-apply(breast2,2,normalize)
+train_labels2 <- as.matrix(select(breast,class))
+
+# Set the target variables as 0 or 1 as it binary classification
+train_labels2[train_labels2==2,]=0
+train_labels2[train_labels2==4,]=1
+```
+
+## Model Development
+
+```{r}
+model2 <- keras_model_sequential()
+model2 %>% 
+  layer_dense(units = 6, activation = 'relu', input_shape = dim(train_data2)[2]) %>% 
+  layer_dense(units = 9, activation = 'relu') %>%
+  layer_dense(units = 6, activation = 'relu') %>%
+  layer_dense(units = 1)
+
+# Since this is a binary classification we use binary cross entropy
+model2 %>% compile(loss = 'binary_crossentropy', optimizer = optimizer_rmsprop(),
+                  metrics = c('accuracy')  # Metrics is accuracy
+)
+
+# Fit the model. Use 20% of data for validation
+history2 <- model2 %>% fit(train_data2, train_labels2, epochs = 30, batch_size = 128, 
+                         validation_split = 0.2)
+```
+
+```{r}
+plot(history2)
+```
+
+#Reference:
+
+https://gigadom.in/2019/07/31/getting-started-with-tensorflow-keras-in-python-and-r/
