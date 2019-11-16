@@ -1,0 +1,423 @@
+---
+title: 'Keras in 100 Lines'
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 3
+    toc_float: null
+    collapsed: yes
+    df_print: paged
+    code_folding: hide
+    smooth_scroll: yes
+---
+<style type="text/css">
+p{ /* Normal  */
+   font-size: 14px;
+   line-height: 18px;}
+body{ /* Normal  */
+   font-size: 14px;}
+td {  /* Table  */
+   font-size: 12px;}
+h1 { /* Header 1 */
+ font-size: 26px;
+ color: #4294ce;}
+h2 { /* Header 2 */
+ font-size: 22px;}
+h3 { /* Header 3 */
+ font-size: 18px;}
+code.r{ /* Code block */
+  font-size: 12px;}
+pre { /* Code block */
+  font-size: 12px}
+#table-of-contents h2 {
+  background-color: #4294ce;}
+#table-of-contents{
+  background: #688FAD;}
+#nav-top span.glyphicon{
+  color: #4294ce;}
+#postamble{
+  background: #4294ce;
+  border-top: ;}
+</style>
+
+```{r echo=FALSE, warning=F, message=F}
+if(!require(easypackages)){install.packages("easypackages")}
+library(easypackages)
+packages("tidyverse", "keras", prompt = TRUE)
+options(digits = 3)
+
+setwd("~/GitHub/DeepLearning")
+```
+
+# Kera Image Classification - 100 Lines
+
+## Data
+
+The dataset is the [fruit images dataset](https://www.kaggle.com/moltean/fruits/data) from Kaggle. Define a list of fruits (corresponding to the folder names) that are to be in the model.
+
+```{r}
+# list of fruits to modle
+fruit_list <- c("Kiwi", "Banana", "Apricot", "Avocado", "Cocos", "Clementine", "Mandarine", "Orange", "Limes", "Lemon", 
+                "Peach", "Plum", "Raspberry", "Strawberry", "Pineapple", "Pomegranate")
+
+# number of output classes (i.e. fruits)
+output_n <- length(fruit_list)
+
+# image size to scale down to (original images are 100 x 100 px)
+img_width <- 20
+img_height <- 20
+target_size <- c(img_width, img_height)
+
+# RGB = 3 channels
+channels <- 3
+
+# path to image folders
+train_image_files_path <- "D:/LargeData/fruits-360/Training/"
+valid_image_files_path <- "D:/LargeData/fruits-360/Test/"
+```
+
+## Loading images
+
+`image_data_generator()` and `flow_images_from_directory()` functions can be used to load images from a directory. If you want to use data augmentation, you can directly define how and in what way you want to augment your images with `image_data_generator`. Not augmenting the data here,  only scale the pixel values to fall between 0 and 1.
+
+```{r}
+# optional data augmentation
+train_data_gen = image_data_generator(
+  rescale = 1/255 #,
+  #rotation_range = 40,
+  #width_shift_range = 0.2,
+  #height_shift_range = 0.2,
+  #shear_range = 0.2,
+  #zoom_range = 0.2,
+  #horizontal_flip = TRUE,
+  #fill_mode = "nearest"
+)
+
+# Validation data shouldn't be augmented! But it should also be scaled.
+valid_data_gen <- image_data_generator(rescale = 1/255) 
+```
+
+Load the images into memory and resize them.
+
+```{r}
+# training images
+train_image_array_gen <- flow_images_from_directory(train_image_files_path, 
+                                          train_data_gen,
+                                          target_size = target_size,
+                                          class_mode = "categorical",
+                                          classes = fruit_list,
+                                          seed = 42)
+
+# validation images
+valid_image_array_gen <- flow_images_from_directory(valid_image_files_path, 
+                                          valid_data_gen,
+                                          target_size = target_size,
+                                          class_mode = "categorical",
+                                          classes = fruit_list,
+                                          seed = 42)
+cat("Number of images per class:")
+
+## Number of images per class:
+table(factor(train_image_array_gen$classes))
+
+cat("\nClass label vs index mapping:\n")
+
+train_image_array_gen$class_indices
+
+fruits_classes_indices <- train_image_array_gen$class_indices
+save(fruits_classes_indices, file = "D:/LargeData/fruits-360/fruits_classes_indices.RData")
+```
+
+## Define model
+
+```{r}
+# number of training samples
+train_samples <- train_image_array_gen$n
+# number of validation samples
+valid_samples <- valid_image_array_gen$n
+
+# define batch size and number of epochs
+batch_size <- 32
+epochs <- 10
+```
+
+The model is a very simple sequential convolutional neural net with the following hidden layers: 
+
+- 2 convolutional layers
+- one pooling layer
+- one dense layer.
+
+```{r}
+# initialise model
+model <- keras_model_sequential()
+
+# add layers
+model %>%
+  layer_conv_2d(filter = 32, kernel_size = c(3,3), padding = "same", input_shape = c(img_width, img_height, channels)) %>%
+  layer_activation("relu") %>%
+  
+  # Second hidden layer
+  layer_conv_2d(filter = 16, kernel_size = c(3,3), padding = "same") %>%
+  layer_activation_leaky_relu(0.5) %>%
+  layer_batch_normalization() %>%
+
+  # Use max pooling
+  layer_max_pooling_2d(pool_size = c(2,2)) %>%
+  layer_dropout(0.25) %>%
+  
+  # Flatten max filtered output into feature vector 
+  # and feed into dense layer
+  layer_flatten() %>%
+  layer_dense(100) %>%
+  layer_activation("relu") %>%
+  layer_dropout(0.5) %>%
+
+  # Outputs from dense layer are projected onto output layer
+  layer_dense(output_n) %>% 
+  layer_activation("softmax")
+
+# compile
+model %>% compile(loss = "categorical_crossentropy", optimizer = optimizer_rmsprop(lr = 0.0001, decay = 1e-6), metrics = "accuracy")
+```
+
+Because `image_data_generator()` and `flow_images_from_directory()` were used, use `fit_generator()` to run the training.
+
+```{r}
+# fit
+hist <- model %>% fit_generator(
+  # training data
+  train_image_array_gen,
+  
+  # epochs
+  steps_per_epoch = as.integer(train_samples / batch_size), 
+  epochs = epochs, 
+  
+  # validation data
+  validation_data = valid_image_array_gen,
+  validation_steps = as.integer(valid_samples / batch_size),
+  
+  # print progress
+  verbose = 2,
+  callbacks = list(
+    # save best model after every epoch
+    callback_model_checkpoint("D:/LargeData/fruits-360/fruits_checkpoints.h5", save_best_only = TRUE),
+    # only needed for visualising with TensorBoard
+    callback_tensorboard(log_dir = "D:/LargeData/fruits-360/fruits-360/keras/logs")
+  )
+)
+```
+
+In RStudio we are seeing the output as an interactive plot in the “Viewer” pane but we can also plot it:
+
+```{r}
+plot(hist)
+```
+
+The model is quite accurate on the validation data. However, need to keep in mind the images are very uniform, they all have the same white background and show the fruits centered and without anything else in the images. Thus, the model will not work with images that do not look similar as the ones  trained (that is also why we can achieve such good results with such a small neural net).
+
+Look at the TensorFlow graph with TensorBoard.
+
+```{r eval=FALSE}
+# initial attempt failed to work - need to discover why
+tensorboard("D:/LargeData/fruits-360/keras/logs")
+```
+
+# Explaining Keras with lime
+
+Use Imagenet (VGG16) to make and explain predictions of fruit images and then extending the analysis to the model just created and compare it with the pretrained net.
+
+Loading additional libraries and models
+```{r}
+# library(keras)   # for working with neural nets
+library(lime)    # for explaining models
+library(magick)  # for preprocessing images
+#library(ggplot2) # for additional plotting
+```
+
+Loading the pretrained Imagenet model
+```{r}
+model <- application_vgg16(weights = "imagenet", include_top = TRUE)
+model
+```
+
+Make sure the original model is loaded.
+
+```{r}
+model2 <- load_model_hdf5(filepath = "D:/LargeData/fruits-360/fruits_checkpoints.h5")
+model2
+```
+
+## Load & Prepare Images
+
+Load and preprocess two images of fruits (yes, this is cheating because choosing images where it is expected the model to work as they are similar to the training images).
+
+- Banana
+
+```{r}
+test_image_files_path <- "D:/LargeData/fruits-360/Test"
+
+img <- image_read('https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Banana-Single.jpg/272px-Banana-Single.jpg')
+img_path <- file.path(test_image_files_path, "Banana", 'banana.jpg')
+image_write(img, img_path)
+plot(as.raster(img))
+```
+
+
+- Clementine
+
+```{r}
+img2 <- image_read('https://cdn.pixabay.com/photo/2010/12/13/09/51/clementine-1792_1280.jpg')
+img_path2 <- file.path(test_image_files_path, "Clementine", 'clementine.jpg')
+image_write(img2, img_path2)
+plot(as.raster(img2))
+```
+
+## Superpixels
+
+> The segmentation of an image into superpixels are an important step in generating explanations for image models. It is both important that the segmentation is correct and follows meaningful patterns in the picture, but also that the size/number of superpixels are appropriate. If the important features in the image are chopped into too many segments the permutations will probably damage the picture beyond recognition in almost all cases leading to a poor or failing explanation model. As the size of the object of interest is varying it is impossible to set up hard rules for the number of superpixels to segment into - the larger the object is relative to the size of the image, the fewer superpixels should be generated. Using plot_superpixels it is possible to evaluate the superpixel parameters before starting the time consuming explanation function. (help(plot_superpixels))
+
+```{r}
+plot_superpixels(img_path, n_superpixels = 35, weight = 10)
+```
+
+```{r}
+plot_superpixels(img_path2, n_superpixels = 50, weight = 20)
+```
+
+From the superpixel plots we can see that the clementine image has a higher resolution than the banana image.
+
+## Prepare images for Imagenet
+
+```{r}
+image_prep <- function(x) {
+  arrays <- lapply(x, function(path) {
+    img <- image_load(path, target_size = c(224,224))
+    x <- image_to_array(img)
+    x <- array_reshape(x, c(1, dim(x)))
+    x <- imagenet_preprocess_input(x)
+  })
+  do.call(abind::abind, c(arrays, list(along = 1)))
+}
+```
+
+- test predictions
+
+```{r}
+res <- predict(model, image_prep(c(img_path, img_path2)))
+imagenet_decode_predictions(res)
+```
+
+- load labels and train explainer
+
+```{r}
+model_labels <- readRDS(system.file('extdata', 'imagenet_labels.rds', package = 'lime'))
+explainer <- lime(c(img_path, img_path2), as_classifier(model, model_labels), image_prep)
+```
+
+Training the explainer (`explain()` function) can take pretty long. It will be much faster with the smaller images but with the bigger Imagenet it takes a few minutes to run.
+
+```{r}
+explanation <- explain(c(img_path, img_path2), explainer, n_labels = 2, n_features = 35,
+                       n_superpixels = 35, weight = 10, background = "white")
+```
+
+`plot_image_explanation()` only supports showing one case at a time
+
+```{r}
+plot_image_explanation(explanation)
+```
+
+```{r}
+clementine <- explanation[explanation$case == "clementine.jpg",]
+plot_image_explanation(clementine)
+```
+
+Prepare images for original model
+
+test predictions (analogous to training and validation images)
+
+```{r}
+test_datagen <- image_data_generator(rescale = 1/255)
+
+test_generator <- flow_images_from_directory(
+        test_image_files_path,
+        test_datagen,
+        target_size = c(20, 20),
+        class_mode = 'categorical')
+
+predictions <- as.data.frame(predict_generator(model2, test_generator, steps = 1))
+```
+
+```{r}
+#load("D:/LargeData/fruits-360/fruits_classes_indices.RData")
+fruits_classes_indices_df <- data.frame(indices = unlist(fruits_classes_indices))
+fruits_classes_indices_df <- fruits_classes_indices_df[order(fruits_classes_indices_df$indices), , drop = FALSE]
+colnames(predictions) <- rownames(fruits_classes_indices_df)
+
+t(round(predictions, digits = 2))
+```
+
+```{r}
+for (i in 1:nrow(predictions)) {
+  cat(i, ":")
+  print(unlist(which.max(predictions[i, ])))
+}
+```
+
+This seems to be incompatible with lime, though - so  prepare the images similarly to the Imagenet images.
+
+```{r}
+image_prep2 <- function(x) {
+  arrays <- lapply(x, function(path) {
+    img <- image_load(path, target_size = c(20, 20))
+    x <- image_to_array(img)
+    x <- reticulate::array_reshape(x, c(1, dim(x)))
+    x <- x / 255
+  })
+  do.call(abind::abind, c(arrays, list(along = 1)))
+}
+```
+- prepare labels
+
+```{r}
+fruits_classes_indices_l <- rownames(fruits_classes_indices_df)
+names(fruits_classes_indices_l) <- unlist(fruits_classes_indices)
+fruits_classes_indices_l
+```
+
+- train explainer
+
+```{r}
+explainer2 <- lime(c(img_path, img_path2), as_classifier(model2, fruits_classes_indices_l), image_prep2)
+explanation2 <- explain(c(img_path, img_path2), explainer2, 
+                        n_labels = 1, n_features = 20,
+                        n_superpixels = 35, weight = 10,
+                        background = "white")
+```
+
+plot feature weights to find a good threshold for plotting block (see below)
+
+```{r}
+explanation2 %>%
+  ggplot(aes(x = feature_weight)) +
+    facet_wrap(~ case, scales = "free") +
+    geom_density()
+```
+
+- plot predictions
+
+```{r}
+plot_image_explanation(explanation2, display = 'block', threshold = 5e-07)
+```
+
+```{r}
+clementine2 <- explanation2[explanation2$case == "clementine.jpg",]
+plot_image_explanation(clementine2, display = 'block', threshold = 0.16)
+```
+
+```{r eval=FALSE}
+save.image("D:/LargeData/fruits-360/Keras100.RData")
+```
+

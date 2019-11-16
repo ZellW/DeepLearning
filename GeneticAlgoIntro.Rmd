@@ -1,0 +1,149 @@
+---
+title: Evolution Works'
+output:
+  rmdformats::readthedown:
+    highlight: pygments
+    code_folding: show
+---
+
+```{r echo=FALSE, warning=F, message=F}
+if(!require(easypackages)){install.packages("easypackages")}
+library(easypackages)
+packages("tidyverse", "GA",  prompt = TRUE)
+options(digits = 3)
+
+setwd("~/R/Complete")
+```
+
+# Introduction
+
+The best way to see how evolution works, is to watch it in action! You can watch the evolution of cars live in this application (but be careful, it’s addictive): [BoxCar 2D](http://boxcar2d.com/) It is fascinating to see how those cars get better and better over time.
+
+This example replects the experiments by evolutionary biologist Richard Dawkins:
+
+> I don’t know who it was first pointed out that, given enough time, a monkey bashing away at random on a typewriter could produce all the works of Shakespeare. The operative phrase is, of course, given enough time. Let us limit the task facing our monkey somewhat. Suppose that he has to produce, not the complete works of Shakespeare but just the short sentence ‘Methinks it is like a weasel’, and we shall make it relatively easy by giving him a typewriter with a restricted keyboard, one with just the 26 (capital) letters, and a space bar. How long will he take to write this one little sentence?
+
+# Project Goal
+
+Put this idea into practice. The following outline is from the Wikipedia article on the weasel program [Weasel program](https://en.wikipedia.org/wiki/Weasel_program):
+
+1. Start with a random string of 28 characters.
+2. Make 100 copies of the string (reproduce).
+3. For each character in each of the 100 copies, with a probability of 5%, replace (mutate) the character with a new random character.
+4. Compare each new string with the target string “METHINKS IT IS LIKE A WEASEL”, and give each a score (the number of letters in the string that are correct and in the correct position).
+5. If any of the new strings has a perfect score (28), halt. Otherwise, take the highest scoring string, and go to step 2.
+
+Using the psuedo code above, translate that into R code.
+
+# R Solution
+
+## Helper Functions
+
+```{r}
+target <- unlist(strsplit("METHINKS IT IS LIKE A WEASEL" , "")) # assign target string to "target"
+pop_sz <- 100 # assign population size 100 to "pop_sz"
+mt_rt <- 0.05 # assign mutation rate 5% to "mt_rt"
+ 
+reproduce <- function(string) {
+  # input: vector "string"
+  # output: matrix with "pop_sz" columns, where each column is vector "string"
+  matrix(string, nrow = length(string), ncol = pop_sz)}
+ 
+mutate <- function(pop) {
+  # input: matrix of population "pop"
+  # output: matrix of population where each character, with a probability of mt_rt per cent (= 5%), is replaced with a new random character
+  mt_pos <- runif(length(pop)) <= mt_rt
+  pop[mt_pos] <- sample(c(LETTERS, " "), sum(mt_pos), replace = TRUE)
+  pop}
+ 
+fitness <- function(pop) {
+  # input: matrix of population "pop"
+  # output: vector of the number of letters that are correct (= equal to target) for each column
+  colSums(pop == target)}
+```
+
+## The 5 Steps
+
+```{r}
+# 1. Start with a random string of 28 characters.
+set.seed(70)
+start <- sample(c(LETTERS, " "), length(target), replace = TRUE)
+ 
+# 2. Make 100 copies of this string (reproduce).
+pop <- reproduce(start)
+ 
+# 3. For each character in each of the 100 copies, with a probability of 5%, replace (mutate) the character with a new random character.
+pop <- mutate(pop)
+ 
+# 4. Compare each new string with the target "METHINKS IT IS LIKE A WEASEL", and give each a score (the number of letters in the string that are correct and in the correct position).
+score <- fitness(pop)
+ 
+# 5. If any of the new strings has a perfect score (28), halt. Otherwise, take the highest scoring string, and go to step 2.
+highscorer <- pop[ , which.max(score)] # assign string to "highscorer" which has max. score in the population
+gen_no <- 1 #assign 1 to generation counter "gen_no"
+ 
+while (max(score) < length(target)) {
+  cat("No. of generations: ", gen_no, ", best so far: ", highscorer, " with score: ", max(score), "\n", sep = "")
+  pop <- reproduce(highscorer)           # 2. select the highest scoring string for reproduction
+  pop <- mutate(pop)                     # 3. mutation
+  score <- fitness(pop)                  # 4. fitness calculation
+  highscorer <- pop[ , which.max(score)] # assign string to "highscorer" which has max. score in the population
+  gen_no <- gen_no + 1                   # increment generation counter
+}
+```
+```{r}
+cat("No. of generations: ", gen_no, ", best so far: ", highscorer, " with score: ", max(score), "\n", sep = "")
+```
+
+## Results/Discussion
+
+The algorithm arrived at the target phrase pretty quickly. You can try to tweak different parameter setting, like the population size or the mutation rate and see what happens. You can of course also change the target phrase.
+
+A minority of people reject the fact of evolution because they miss a crucial step: selection based on fitness. Selection gives evolution direction towards solutions that are better able to solve a certain problem. It is the exact opposite of pure randomness which many people still suspect behind evolution.
+
+To see the difference comment out the line `pop <- reproduce(highscorer)` which selects the highest scoring string for reproduction. We can see that without selection there is no improvement to be seen and the algorithm would run _forever_.
+
+If you do this, the code would not work at all.  Only indecipherable garbage would be returned.
+
+# Genetic Algorithms
+
+Because evolution is a very powerful _optimization_ method, there are real world applications of so called _genetic algorithms_ (GA). In the following example find the _global optimum_ of the so called `Rastrigin` function. What makes this task especially difficult for this popular test problem is the large number of _local minima_, as can be seen when plotting the function:
+
+```{r}
+Rastrigin <- function(x1, x2) {20 + x1^2 + x2^2 - 10*(cos(2*pi*x1) + cos(2*pi*x2))}
+ 
+x1 <- x2 <- seq(-5.12, 5.12, by = 0.1)
+f <- outer(x1, x2, Rastrigin)
+persp3D(x1, x2, f, theta = 50, phi = 20)
+```
+
+```{r}
+filled.contour(x1, x2, f, color.palette = bl2gr.colors)
+```
+
+To find the global minimum (spoiler: it is at 0,0) we use the GA package (because GA only maximizes we use the minus sign in front of the fitness function):
+
+```{r}
+set.seed(70)
+GA <- ga(type = "real-valued", 
+         fitness =  function(x) -Rastrigin(x[1], x[2]),
+         lower = c(-5.12, -5.12), upper = c(5.12, 5.12), 
+         maxiter = 1000)
+summary(GA)
+```
+```{r}
+plot(GA)
+```
+
+```{r}
+filled.contour(x1, x2, f, color.palette = bl2gr.colors, plot.axes = {
+  axis(1); axis(2); points(GA@solution[ , 1], GA@solution[ , 2], pch = 3, cex = 2, col = "white", lwd = 2)})
+```
+
+Evolution just works!
+
+# Reference
+
+http://blog.ephorie.de/evolution-works
+
+

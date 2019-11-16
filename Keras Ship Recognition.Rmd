@@ -1,0 +1,310 @@
+---
+title: "Your Document Title"
+author: "Document Author"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+# Introduction
+
+Artificial Intelligence has exploded in popularity both in business as in society. Companies large and small are redirecting their digital transformation to include technologies that are the true representation of what AI currently is; namely, deep learning. Deep learning is a subset of machine learning, which more generally, falls into data science. Both machine learning and deep learning find themselves at the peak of 2017’s Gartner Hype Cycle and are already making a huge impact on the current technological status quo. Let’s take a look at one way of going about creating a basic machine learning model.
+
+# What is TensorFlow and Keras ?
+
+__TensorFlow__ is an open-source software library for Machine Intelligence that allows you to deploy computations to multiple CPUs or GPUs. It was developed by researchers and engineers working on the Google Brain Team.
+
+__Keras__ is a high-level neural networks API capable of running on top of multiple back-ends including: TensorFlow, CNTK, or Theano. One of its biggest advantages is its _user friendliness_. With Keras you can easily build advanced models like convolutional or recurrent neural network.
+
+To install TensorFlow and Keras from R use `install_keras()` function. If you want to use the GPU version you have to install some prerequisites first. This could be difficult but it is worth the extra effort when dealing with larger and more elaborate models. 
+
+```{r eval=FALSE}
+install.packages("keras")
+library(keras)
+# Make sure to install required prerequisites, before installing Keras using the commands below:
+install_keras() # CPU version
+install_keras(tensorflow = "gpu") # GPU version
+```
+
+# Data 
+
+## Kaggle Documentation
+
+Use a dataset of 2800 satellite pictures from [Kaggle](https://www.kaggle.com/rhammell/ships-in-satellite-imagery/data). 
+
+The dataset consists of image chips extracted from Planet satellite imagery collected over the San Francisco Bay and San Pedro Bay areas of California. It includes 4000 80x80 RGB images labeled with either a "ship" or "no-ship" classification. Image chips were derived from PlanetScope full-frame visual scene products, which are orthorectified to a 3 meter pixel size. 
+
+Provided is a zipped directory `shipsnet.zip` that contains the entire dataset as .png image chips. Each individual image filename follows a specific format: {label} __ {scene id} __ {longitude} _ {latitude}.png
+
+- __label__: Valued 1 or 0, representing the "ship" class and "no-ship" class, respectively. 
+- __scene id__: The unique identifier of the PlanetScope visual scene the image chip was extracted from. The scene id can be used with the [Planet API](https://developers.planet.com/docs/api/) to discover and download the entire scene.
+- __longitude_latitude: The longitude and latitude coordinates of the image center point, with values separated by a single underscore. __
+
+The dataset is also distributed as a JSON formatted text file `shipsnet.json`. The loaded object contains `data, label`, `scene_ids`, and `location` lists. 
+
+The pixel value data for each 80x80 RGB image is stored as a list of 19200 integers within the data list. The first 6400 entries contain the red channel values, the next 6400 the green, and the final 6400 the blue. The image is stored in row-major order, so that the first 80 entries of the array are the red channel values of the first row of the image.
+
+The list values at index i in `labels`, `scene_ids`, and `locations` each correspond to the _i_-th image in the `data` list.
+
+### Class Labels
+
+The `ship` class includes 1000 images. Images in this class are near-centered on the body of a single ship. Ships of different sizes, orientations, and atmospheric collection conditions are included. 
+
+The `no-ship` class includes 3000 images. A third of these are a random sampling of different landcover features - water, vegetion, bare earth, buildings, etc. - that do not include any portion of an ship. The next third are "partial ships" that contain only a portion of an ship, but not enough to meet the full definition of the "ship" class. The last third are images that have previously been mislabeled by machine learning models, typically caused by bright pixels or strong linear features. 
+
+Every row contains information about one photo (80-pixel height, 80-pixel width, 3 colors – RGB color space). To input data into a Keras model, transform it into a 4-dimensional array (index of sample, height, width, colors). Every picture is associated with a label that could be equal 1 for a ship and 0 for non-ship object. Use some transformations to create a binary matrix for Keras.
+
+```{r eval=FALSE}
+library(keras)
+library(tidyverse)
+library(jsonlite)
+library(abind)
+library(gridExtra)
+
+setwd("~/R/Complete")
+
+ships_json <- fromJSON("data/ships/shipsnet.json")[1:2]
+
+ships_data <- ships_json$data %>%
+  apply(., 1, function(x) {
+    r <- matrix(x[1:6400], 80, 80, byrow = TRUE) / 255
+    g <- matrix(x[6401:12800], 80, 80, byrow = TRUE) / 255
+    b <- matrix(x[12801:19200], 80, 80, byrow = TRUE) / 255
+    list(array(c(r,g,b), dim = c(80, 80, 3)))
+  }) %>%
+  do.call(c, .) %>%
+  abind(., along = 4) %>%
+  aperm(c(4, 1, 2, 3))
+
+ships_labels <- ships_json$labels %>% to_categorical(2)
+
+rm(ships_json)
+
+dim(ships_data)
+
+save.image("data/ships/ships_data.RData")
+```
+
+Now we can take a look at some sample of our data. Notice that if a ship appeared partially on a picture, then it was not labeled as 1.
+
+```{r}
+xy_axis <- data.frame(x = expand.grid(1:80, 80:1)[, 1],
+                      y = expand.grid(1:80, 80:1)[, 2])
+set.seed(1111)
+sample_plots <- sample(1:dim(ships_data)[1], 12) %>%
+  map(~ {
+    plot_data <- cbind(xy_axis, r = as.vector(t(ships_data[.x, , , 1])),
+                       g = as.vector(t(ships_data[.x, , , 2])),
+                       b = as.vector(t(ships_data[.x, , , 3])))
+    ggplot(plot_data, aes(x, y, fill = rgb(r, g, b))) + guides(fill = FALSE) +
+      scale_fill_identity() + theme_void() + geom_raster(hjust = 0, vjust = 0) +
+      ggtitle(ifelse(ships_labels[.x, 2], "Ship", "Non-ship"))
+  })
+
+do.call("grid.arrange", c(sample_plots, ncol = 4, nrow = 3))
+```
+
+The last thing we have to do is to split our data into training and test sets.
+
+```{r}
+set.seed(1234)
+indexes <- sample(1:nrow(ships_labels), 0.7 * nrow(ships_labels))
+train <- list(data = ships_data[indexes, , , ], labels = ships_labels[indexes, ])
+test <- list(data = ships_data[-indexes, , , ], labels = ships_labels[-indexes, ])
+```
+
+# Modeling
+
+In Keras you can build models in 3 different ways using:
+- a sequential model
+- functional API
+- pre-trained models
+
+For now, we will only use sequential models. But before that, we have to understand the basic concepts behind convolutional neural networks.
+
+Convolutional neural networks (CNN) or ConvNets are a class of deep, feed-forward artificial neural networks designed for solving problems like image/video/audio recognition, and object detection etc. The architecture of ConvNets differs depending on the issue, but there are some basic commonalities.
+
+The first type of layer in CNN’s is a `convolutional layer` and it is a core building block of ConvNets. Simply put, we take a small set of filters (also called kernels) and place them on part of our original image to get the dot product between kernels and corresponding image parts. Next, we move our filter to the next position and repeat this action. The number of pixels that we move the filters is called a stride. After getting the dot product for the whole image, we get a so-called activation map.
+
+The second type of layer in CNN’s is the pooling layer. This layer is responsible for dimensionality reduction of activation maps. There are several types of pooling, but `max pooling` is most commonly used. As it was in the case of convolutional layers, we have some filter and strides. After placing the filter on an image part, we take the maximum value from that part and move to the next region by the number of pixels, specified as strides.
+
+The third type of layer in CNN’s is called the `activation layer`. In this layer, values from activation maps are transformed by some activation function. There are several functions to use but most common one is called a rectified linear unit (`ReLU`).
+
+The fourth type of layer is called a `densely (fully) connected layer` which is a classical output layer known as a feed-forward neural networks. This fully connected layer is placed at the end of a ConvNet.
+
+Create an empty sequential model:
+
+```{r}
+model <- keras_model_sequential()
+summary(model)
+```
+
+Now add additional layers. Note that objects in Keras are modified in-place so there’s no need for consecutive assignment. In the first layer, specify the shape of the data.
+
+```{r}
+model %>%
+  # 32 filters, each size 3x3 pixels
+  # ReLU activation after convolution
+  layer_conv_2d(
+    input_shape = c(80, 80, 3),
+    filter = 32, kernel_size = c(3, 3), strides = c(1, 1),
+    activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2), strides = c(2, 2)) %>%
+  layer_conv_2d(filter = 64, kernel_size = c(3, 3), strides = c(1, 1),
+                activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2), strides = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(2, activation = "softmax")
+
+summary(model)
+```
+
+After building the architecture for the CNN, configure it for training. Specify the loss function, optimizer and additional metrics for evaluation. For example, use stochastic gradient descent as an optimization method and cross-entropy as a loss function.
+
+```{r}
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_sgd(lr = 0.0001, decay = 1e-6),
+  metrics = "accuracy"
+)
+```
+
+Now fit the model. However, to have a good and quick visualization of results, run a visualization tool called `TensorBoard.`
+
+```{r}
+tensorboard("logs/ships")
+
+ships_fit <- model %>% fit(x = train[[1]], y = train[[2]], epochs = 20, batch_size = 32,
+                           validation_split = 0.2,
+                           callbacks = callback_tensorboard("logs/ships"))
+```
+
+Lastly, calcualte evaluation metrics and predictions from the test set.
+
+```{r}
+predicted_probs <- model %>% predict_proba(test[[1]]) %>% cbind(test[[2]])
+
+head(predicted_probs)
+
+model %>% evaluate(test[[1]], test[[2]])
+
+set.seed(1111)
+sample_plots <- sample(1:dim(test[[1]])[1], 12) %>%
+  map(~ {
+    plot_data <- cbind(xy_axis, r = as.vector(t(test[[1]][.x, , , 1])),
+                       g = as.vector(t(test[[1]][.x, , , 2])),
+                       b = as.vector(t(test[[1]][.x, , , 3])))
+    ggplot(plot_data, aes(x, y, fill = rgb(r, g, b))) + guides(fill = FALSE) +
+      scale_fill_identity() + theme_void() + geom_raster(hjust = 0, vjust = 0) +
+      ggtitle(ifelse(test[[2]][.x, 2], "Ship", "Non-ship")) +
+      labs(caption = paste("Ship prob:", round(predicted_probs[.x, 2], 6))) +
+      theme(plot.title = element_text(hjust = 0.5))
+  })
+
+do.call("grid.arrange", c(sample_plots, ncol = 4, nrow = 3))
+```
+
+Unfortunately,  the model leaves room for improvement. It has a low accuracy (.075) and a high cross entropy loss (0.52). 
+
+# Improvements
+
+## Data
+
+There are 2800 satelite images (80 pixel height, 80 pixel width, 3 colors – RGB color space). This is not a large sample, especially in Deep Learning. In situations like this, a common practise is to use some geometric transformation (rotation, translation, thickening, blurring etc.) to enlarge training set. We can use `rot90` from `pracma` to create images rotated by 90, 180, or 270 degrees. 
+
+```{r eval=FALSE}
+library(pracma)
+library(tictoc)
+
+tic()
+ships_json <- fromJSON("data/ships/shipsnet.json")[1:2]
+toc()
+
+ships_data <- ships_json$data %>%
+  apply(., 1, function(x) {
+    r <- matrix(x[1:6400], 80, 80, byrow = TRUE) / 255
+    g <- matrix(x[6401:12800], 80, 80, byrow = TRUE) / 255
+    b <- matrix(x[12801:19200], 80, 80, byrow = TRUE) / 255
+    list(array(c(r, g, b), dim = c(80, 80, 3)), # Orginal
+         array(c(rot90(r, 1), rot90(g, 1), rot90(b, 1)), dim = c(80, 80, 3)), # 90 degrees
+         array(c(rot90(r, 2), rot90(g, 2), rot90(b, 2)), dim = c(80, 80, 3)), # 180 degrees
+         array(c(rot90(r, 3), rot90(g, 3), rot90(b, 3)), dim = c(80, 80, 3))) # 270 degrees
+  }) %>%
+  do.call(c, .) %>%
+  abind(., along = 4) %>% # Combine 3-dimensional arrays into 4-dimensional array
+  aperm(c(4, 1, 2, 3)) # Array transposition
+
+ships_labels <- ships_json$labels %>%
+  map(~ rep(.x, 4)) %>%
+  unlist() %>%
+  to_categorical(2)
+
+set.seed(1234)
+indexes <- sample(1:dim(ships_data)[1], 0.7 * dim(ships_data)[1] / 4) %>%
+  map(~ .x + 0:3) %>%
+  unlist()
+train <- list(data = ships_data[indexes, , , ], labels = ships_labels[indexes, ])
+test <- list(data = ships_data[-indexes, , , ], labels = ships_labels[-indexes, ])
+
+xy_axis <- data.frame(x = expand.grid(1:80, 80:1)[ ,1],
+                      y = expand.grid(1:80, 80:1)[ ,2])
+
+sample_plots <- 1:4 %>% map(~ {
+  plot_data <- cbind(xy_axis,
+                     r = as.vector(t(ships_data[.x, , ,1])),
+                     g = as.vector(t(ships_data[.x, , ,2])),
+                     b = as.vector(t(ships_data[.x, , ,3])))
+  ggplot(plot_data, aes(x, y, fill = rgb(r, g, b))) +
+    guides(fill = FALSE) +
+    scale_fill_identity() +
+    theme_void() +
+    geom_raster(hjust = 0, vjust = 0) +
+    ggtitle(paste(((.x - 1) * 90) %% 360, "degree rotation"))
+})
+
+do.call("grid.arrange", c(sample_plots, ncol = 2, nrow = 2))
+
+save.image("data/ships/ships_data.RData")
+```
+
+Add some previously mentioned layers (convolutional, pooling, activation) with some new ones. The network is getting bigger and more complicated. As such, it could be prone to overfitting. To mitigate this, use a regularization method called dropout. In dropout, individual nodes are either removed from the network with some probability 1-p or kept with probability p. To add dropout to a convolutional neural network in Keras use the `layer_dropout()` function and set the rate parameter to a desired probability.
+
+```{r}
+model2 <- keras_model_sequential()
+model2 %>%
+  layer_conv_2d(
+    filter = 32, kernel_size = c(3, 3), padding = "same", 
+    input_shape = c(80, 80, 3), activation = "relu") %>%
+  layer_conv_2d(filter = 32, kernel_size = c(3, 3),
+                activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_dropout(0.25) %>%
+  layer_conv_2d(filter = 64, kernel_size = c(3, 3), padding = "same",
+                activation = "relu") %>%
+  layer_conv_2d(filter = 64, kernel_size = c(3, 3),
+                activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_dropout(0.25) %>%
+  layer_flatten() %>%
+  layer_dense(512, activation = "relu") %>%
+  layer_dropout(0.5) %>%
+  layer_dense(2, activation = "softmax")
+```
+
+## Optimizer
+
+Choose a loss function and optimization algorithm. In Keras, you can choose from several algoritms such as a simple Stochastic Gradient Descent to a more adaptive algorithm like Adaptive Moment Estimation. Choosing a good optimizer could be crucial. In Keras, optimizer functions start with optimizer_:
+
+```{r}
+model2 %>% compile(loss = "categorical_crossentropy", 
+                   optimizer = optimizer_adamax(lr = 0.0001, decay = 1e-6), metrics = "accuracy")
+```
+
+## Results
+
+The figure below shows the values of our accuracy and loss function (cross-entropy) before (Model 1) and after (Model 2) modifications. We can see noticeable growth in our validation set accuracy (from 0.7449 to 0.9828) and loss function decrease (from 0.556 to 0.04573).
+
+
+https://appsilon.com/ship-recognition-in-satellite-imagery-part-ii/

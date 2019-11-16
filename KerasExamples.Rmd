@@ -47,11 +47,6 @@ border-top: ;
 }
 </style>
 
-```{r installKeras}
-#https://github.com/statsmaths/kerasR
-
-```
-
 
 ```{r loadLibs1, warning=FALSE, message=FALSE}
 #if(!require(bayesian_first_aid)){devtools::install_github("rasmusab/bayesian_first_aid")}
@@ -66,7 +61,9 @@ options(scipen = 999)#Do not display exponents
 
 # Introduction
 
-Keras provides a language for building neural networks as connections between general purpose layers. In this vignette we illustrate the basic usage of the R interface to Keras. A self-contained introduction to general neural networks is outside the scope of this document; if you are unfamiliar with the general principles we suggest consulting one of the excellent external tutorials. Suggestions include:
+> kerasR is not as well maintained as RStudio's keras package.  This was rewritten to use keras, not kerasR
+
+. In this vignette we illustrate the basic usage of the R interface to Keras. A self-contained introduction to general neural networks is outside the scope of this document; if you are unfamiliar with the general principles we suggest consulting one of the excellent external tutorials. Suggestions include:
 
 - [Hacker’s guide to Neural Networks](http://karpathy.github.io/neuralnets/)
 - [Neural Networks and Deep Learning](http://neuralnetworksanddeeplearning.com/)
@@ -80,221 +77,47 @@ Specific research papers for many advanced layers are also included in the R doc
 Building a model in Keras starts by constructing an empty Sequential model.
 
 ```{r}
-library(kerasR)
-mod <- Sequential()
+library(keras)
+mod <- keras_model_sequential()
 ```
 
-The result of Sequential, as with most of the functions provided by kerasR, is a python.builtin.object. This object type, defined from the reticulate package, provides direct access to all of the methods and attributes exposed by the underlying python class. To access these, we use the $ operator followed by the method name. Layers are added by calling the method add. This function takes as an input another python.builtin.object, generally constructed as the output of another kerasR function. For example, to add a dense layer to our model we do the following:
-mod$add(Dense(units = 50, input_shape = 13))
+The result of Sequential, as with most of the functions provided by `kerasR`, is a `python.builtin.object`. This object type, defined from the `reticulate` package, provides direct access to all of the methods and attributes exposed by the underlying python class. To access these, we use the $ operator followed by the method name. Layers are added by calling the method `add`. This function takes as an input another `python.builtin.object`, generally constructed as the output of another `kerasR` function. For example, to add a dense layer to our model we do the following:
+
+```{r eval = FALSE}
+mod$add(layer_dense(units = 50, input_shape = 13))
+```
+
 We have now added a dense layer with 200 neurons. The first layer must include a specification of the input_shape, giving the dimensionality of the input data. Here we set the number of input variables equal to 13. Next in the model, we add an activation defined by a rectified linear unit to the model:
-mod$add(Activation("relu"))
-Now, we add a dense layer with just a single neuron to serve as the output layer:
-mod$add(Dense(units = 1))
+
+```{r eval=FALSE}
+mod$add(layer_activation_relu())
+```
+
+Now add a dense layer with just a single neuron to serve as the output layer:
+
+```{r eval=`}
+mod$add(layer_dense(units = 1))
+```
+
 Once the model is fully defined, we have to compile it before fitting its parameters or using it for prediction. Compiling a model can be done with the method compile, but some optional arguments to it can cause trouble when converting from R types so we provide a custom wrapper keras_compile. At a minimum we need to specify the loss function and the optimizer. The loss can be specified with just a string, but we will pass the output of another kerasR function as the optimizer. Here we use the RMSprop optimizer as it generally gives fairly good performance:
-keras_compile(mod,  loss = 'mse', optimizer = RMSprop())
+
+```{r}
+mod %>% compile(loss = 'mse', optimizer = optimizer_rmsprop(), metrics = "acc")
+```
+
 Now we are able to fit the weights in the model from some training data, but we do not yet have any data from which to train! Let’s load some using the wrapper function load_boston_housing. We provide several data loading functions as part of the package, and all return data in the same format. In this case it will be helpful to scale the data matrices:
-boston <- load_boston_housing()
+
+```{r}
+boston <- kerasR::load_boston_housing()
 X_train <- scale(boston$X_train)
 Y_train <- boston$Y_train
 X_test <- scale(boston$X_test)
 Y_test <- boston$Y_test
+```
+
 Now, we call the wrapper keras_fit in order to fit the model from this data. As with the compilation, there is a direct method for doing this but you will likely run into data type conversion problems calling it directly. Instead, we see how easy it is to use the wrapper function (if you run this yourself, you will see that Keras provides very good verbose output for tracking the fitting of models):
-keras_fit(mod, X_train, Y_train,
-          batch_size = 32, epochs = 200,
-          verbose = 1, validation_split = 0.1)
-output
-Notice that the model does not do particularly well here, probably due to over-fitting on such as small set.
-pred <- keras_predict(mod, normalize(X_test))
-sd(as.numeric(pred) - Y_test) / sd(Y_test)
-## [1] 0.7692395
-A Larger Example (MNIST)
-To show the power of neural networks we need a larger dataset to make use of. A popular first dataset for applying neural networks is the MNIST Handwriting dataset, consisting of small black and white scans of handwritten numeric digits (0-9). The task is to build a classifier that correctly identifies the numeric value from the scan. We may load this dataset in with the following:
-mnist <- load_mnist()
-X_train <- mnist$X_train
-Y_train <- mnist$Y_train
-X_test <- mnist$X_test
-Y_test <- mnist$Y_test
-dim(X_train)
-## [1] 60000    28    28
-Notice that the training data shape is three dimensional (in the language of Keras this is a tensor). The first dimension is the specific sample number, the second is the row of the scan, and the third is the column of the scan. We will use this additional spatial information in the next section, but for now let us flatten the data so that is is just a 2D-Tensor. The values are pixel intensities between 0 and 255, so we will also normalize the values to be between 0 and 1:
-X_train <- array(X_train, dim = c(dim(X_train)[1], prod(dim(X_train)[-1]))) / 255
-X_test <- array(X_test, dim = c(dim(X_test)[1], prod(dim(X_test)[-1]))) / 255
-Finally, we want to process the response vector y into a different format as well. By default it is encoded in a one-column matrix with each row giving the number represented by the hand written image. We instead would like this to be converted into a 10-column binary matrix, with exactly one 1 in each row indicating which digit is represented. This is similar to the factor contrasts matrix one would construct when using factors in a linear model. In the neural network literature it is call the one-hot representation. We construct it here via the wrapper function to_categorical. Note that we only want to convert the training data to this format; the test data should remain in its original one-column shape.
-Y_train <- to_categorical(mnist$Y_train, 10)
-With the data in hand, we are now ready to construct a neural network. We will create three blocks of identical Dense layers, all having 512 nodes, a leaky rectified linear unit, and drop out. These will be followed on the top output layer of 10 nodes and a final softmax activation. These are fairly well-known choices for a simple dense neural network and allow us to show off many of the possibilities within the kerasR interface:
-mod <- Sequential()
 
-mod$add(Dense(units = 512, input_shape = dim(X_train)[2]))
-mod$add(LeakyReLU())
-mod$add(Dropout(0.25))
-
-mod$add(Dense(units = 512))
-mod$add(LeakyReLU())
-mod$add(Dropout(0.25))
-
-mod$add(Dense(units = 512))
-mod$add(LeakyReLU())
-mod$add(Dropout(0.25))
-
-mod$add(Dense(10))
-mod$add(Activation("softmax"))
-We then compile the model with the “categorical_crossentropy” loss and fit it on the training data:
-keras_compile(mod,  loss = 'categorical_crossentropy', optimizer = RMSprop())
-keras_fit(mod, X_train, Y_train, batch_size = 32, epochs = 5, verbose = 1,
-          validation_split = 0.1)
-Now that the model is trained, we could use the function keras_predict once again, however this would give us an output matrix with 10 columns. It is not too much work to turn this into predicted classes, but kerasR provides keras_predict_classes that extracts the predicted classes directly. Using this we are able to evaluate the data on the test set.
-Y_test_hat <- keras_predict_classes(mod, X_test)
-table(Y_test, Y_test_hat)
-mean(Y_test == Y_test_hat)
-##       Y_test_hat
-## Y_test         0    1    2    3    4    5    6    7    8    9
-##           0  952    1    5    0    1   11    4    1    3    2
-##           1    0 1121    5    0    0    1    2    0    6    0
-##           2    1    4  987    0   16    0    3    9   12    0
-##           3    0    1   17  946    3   13    0   15    6    9
-##           4    0    0    3    0  965    0    1    1    1   11
-##           5    2    1    2   17    8  812    9    2   27   12
-##           6    4    3    2    0   13    7  923    0    6    0
-##           7    1    7    8    1    4    1    0  999    0    7
-##           8    2    1    6    7    5    4    0    8  937    4
-##           9    1    7    1    5   18    3    1   13    2  958
-## [1] 0.96
-Looking at the mis-classification rate and the confusion matrix, we see that the neural network performs very well (with a classification rate around 95%). It’s possible to get slightly higher with strictly dense layers by employing additional tricks and using larger models with more regularization. To increase the model drastically requires the use of convolutional neural networks (CNN), which we will look at in the next section.
-Convolutional neural networks
-To begin, we load the MNIST dataset in once again, but this time increase the number of dimension in the X_train tensor by one rather than reducing it by one. These images are black and white and one way to think about this additional dimension is that it represents a “gray” channel.
-mnist <- load_mnist()
-
-X_train <- array(mnist$X_train, dim = c(dim(mnist$X_train), 1)) / 255
-Y_train <- to_categorical(mnist$Y_train, 10)
-X_test <- array(mnist$X_test, dim = c(dim(mnist$X_test), 1)) / 255
-Y_test <- mnist$Y_test
-Now we build a CNN model by using the convolution specific Conv2D and MaxPooling layers. The flatten layer converts its inputs into a 2-dimensional tensor so that we can follow up with Dense layers on the top. Using deep convolution layers followed by Dense layers at the top of the network are a common design pattern in neural networks.
-mod <- Sequential()
-
-mod$add(Conv2D(filters = 32, kernel_size = c(3, 3),
-               input_shape = c(28, 28, 1)))
-mod$add(Activation("relu"))
-mod$add(Conv2D(filters = 32, kernel_size = c(3, 3),
-               input_shape = c(28, 28, 1)))
-mod$add(Activation("relu"))
-mod$add(MaxPooling2D(pool_size=c(2, 2)))
-mod$add(Dropout(0.25))
-
-mod$add(Flatten())
-mod$add(Dense(128))
-mod$add(Activation("relu"))
-mod$add(Dropout(0.25))
-mod$add(Dense(10))
-mod$add(Activation("softmax"))
-Once the model has been created, we compile it and fit it to the data using the exact same functions as previously used.
-keras_compile(mod,  loss = 'categorical_crossentropy', optimizer = RMSprop())
-keras_fit(mod, X_train, Y_train, batch_size = 32, epochs = 5, verbose = 1,
-          validation_split = 0.1)
-And we see that this new data has improved the overall classification rate:
-Y_test_hat <- keras_predict_classes(mod, X_test)
-table(Y_test, Y_test_hat)
-mean(Y_test == Y_test_hat)
-##       Y_test_hat
-## Y_test    0    1    2    3    4    5    6    7    8    9
-##           0  970    0    0    0    2    0    5    0    1    2
-##           1    0 1133    2    0    0    0    0    0    0    0
-##           2    2    2 1023    0    2    0    0    3    0    0
-##           3    0    0    1 1006    0    1    0    1    1    0
-##           4    1    0    0    0  975    0    2    0    1    3
-##           5    3    0    0    9    0  874    3    0    1    2
-##           6    4    2    0    0    4    4  944    0    0    0
-##           7    0    4   10    1    0    0    0 1011    1    1
-##           8    4    0    4    3    3    0    0    1  953    6
-##           9    1    0    1    1    9    2    0    6    0  989
-## 0.9878
-We now have a classification rate of over 98.7%, converting almost twice as many mis-classified digits from before into the correct buckets now.
-Recurrent Neural Networks (RNN) with IMDB
-As a final example, we will demonstrate the usage of recurrent neural networks in Keras. RNNs are able to “hold their state” in between inputs, and therefore are useful for modeling a sequence of data such as occurs with a time series or with a collection words in a text. Here we will use them to predict whether a movie review from IMDB is generally positive (1) or negative (0). We’ll load the data in using a similar command as with the Boston Housing Data and MNIST, but here the load functions has a few options that we can set. Once the data is loaded, we’ll use the wrapper pad_sequences to make sure every review has exactly 100 words (those with fewer get padded with a special “word” coded as zeros). Because there are only two classes, we can keep Y_train in its default format.
-imdb <- load_imdb(num_words = 500, maxlen = 100)
-
-X_train <- pad_sequences(imdb$X_train[1:4000], maxlen = 100)
-Y_train <- imdb$Y_train[1:4000]
-X_test <- pad_sequences(imdb$X_train[4001:5736], maxlen = 100)
-Y_test <- imdb$Y_train[4001:5736]
-Notice that there is not an explicit test set so we made that manually by using only the first 4000 document for training. Now we’ll build a model that includes an Embedding layer. This maps each word index in X_train into a 500 dimensional space. If you are familiar with the word2vec or GloVe algorithms, these are just particular, well-known examples of word embeddings. Following the embedding we will flatten the output and add a Dense layer before predicting the output. As we only have a single output, we’ll use a sigmoid activation rather than a softmax.
-mod <- Sequential()
-
-mod$add(Embedding(500, 32, input_length = 100, input_shape = c(100)))
-mod$add(Dropout(0.25))
-
-mod$add(Flatten())
-
-mod$add(Dense(256))
-mod$add(Dropout(0.25))
-mod$add(Activation('relu'))
-
-mod$add(Dense(1))
-mod$add(Activation('sigmoid'))
-We use almost the exact same commands to compile and fit the model, but here modify the loss to be “binary_crossentropy” because we have only one column in the output. We also found that the learning rate needed to be made slightly smaller as to not overfit the data.
-keras_compile(mod,  loss = 'binary_crossentropy', optimizer = RMSprop(lr = 0.00025))
-keras_fit(mod, X_train, Y_train, batch_size = 32, epochs = 10, verbose = 1,
-          validation_split = 0.1)
-Now we predict the raw values and round to the nearest integer, which should be either 0 or 1, and compare to the actual test set.
-Y_test_hat <- keras_predict(mod, X_test)
-table(Y_test, round(Y_test_hat))
-mean(Y_test == as.numeric(round(Y_test_hat)))
-## Y_test   0   1
-##     0 609 189
-##     1 175 763
-## [1] 0.7903226
-This gives a classification rate of 79%. We can try to improve that by including a Long-Short Term Memory Unit (LSTM), an explicit RNN layer, in the model. This is easy to program, but it makes the model learn about 5-10 times slower, at least if you are not running on a dedicated GPU.
-mod <- Sequential()
-
-mod$add(Embedding(500, 32, input_length = 100, input_shape = c(100)))
-mod$add(Dropout(0.25))
-
-mod$add(LSTM(32))
-
-mod$add(Dense(256))
-mod$add(Dropout(0.25))
-mod$add(Activation('relu'))
-
-mod$add(Dense(1))
-mod$add(Activation('sigmoid'))
-Which we compile and fit as before:
-keras_compile(mod,  loss = 'binary_crossentropy', optimizer = RMSprop(lr = 0.00025))
-keras_fit(mod, X_train, Y_train, batch_size = 32, epochs = 10, verbose = 1,
-          validation_split = 0.1)
-The test results do offer an improvement:
-Y_test_hat <- keras_predict(mod, X_test)
-mean(Y_test == as.numeric(round(Y_test_hat)))
-## Y_test   0   1
-##      0 579 219
-##      1  84 854
-## [1] 0.8254608
-With the classification rate now up to 82.5%. The real power of RNNs, however, really comes out with larger models.
-Saving models
-Because most of the objects returned by kerasR functions are references to Python objects, trying to save them with readRDS or other R-specific functions will generally fail. Instead, you should use one of the three specific wrapper included with kerasR. Given the model from the previous fits, we can do any one of the following:
-keras_save(mod, "full_model.h5")
-keras_save_weights(mod, "weights_model.h5")
-keras_model_to_json(mod, "model_architecture.json")
-The first saves the entire model, which is more than likely what most users would want, as a binary file. The second saves only the weights as a binary file; the actual model architecture would have to be created again in R. Finally, the last saves just a json description of the model. This is probably most helpful because it gives a human-readable description of your model architecture. The follow functions show how to read these outputs back into R, respectively:
-mod <- keras_load("full_model.h5")
-keras_load_weights(mod, tf)
-mod <- keras_model_to_json("model_architecture.json")
-Note that all three outputs can be read directly into a Python session running the keras module.
-Loading Pretrained Models
-Another fantastic feature in Keras is the inclusion of several pretrained, state of the art, image processing models. We will show a small example of using InceptionV3 to classify a photo of an elephant. Specifically, let’s classify this elephant photo:
- 
-Elephant
-To begin with, let us load the InceptionV3 model into R:
-inception <- InceptionV3(weights='imagenet')
-And then, we will use the wrapper load_img to load the elephant image into R as a python object, and then convert it into an array with img_to_array and expand_dims:
-img <- load_img("elephant.jpg", target_size = c(299, 299))
-x <- img_to_array(img)
-x <- expand_dims(x, axis = 0)
-We specifically ask that the image be converted into a 299 by 299 image, the size of the images used to train VGG19 from imagenet. The photo must then also undergo the exact same preprocessing used on images that trained InceptionV3, which in this case just divides all the pixels by 255
-x <- x / 255
-We can get the raw prediction categories with
-pred <- keras_predict(inception, x)
-But even more directly, we can take this output and get category names:
-> unlist(decode_predictions(pred, model = "InceptionV3", top = 3))
-[1] "n01871265"         "tusker"            "0.546035408973694"
-[4] "n02504013"         "Indian_elephant"   "0.247862368822098"
-[7] "n02504458"         "African_elephant"  "0.143739387392998"
-And we see that VGG19 correctly identifies the most likely animal in the photo as an elephant. More specifically, it spreads the probability weights over 3 specific sub-types of elephant.
+```{r}
+history <- mod %>% fit(X_train, Y_train, batch_size = 32, epochs = 80, verbose = 1, validation_split = 0.1)
+plot(history)
+```

@@ -1,0 +1,548 @@
+---
+title: 'Neural Networks: A Quick Introduction'
+output:
+  html_document:
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_float: true
+    toc_collapsed: true
+    toc_depth: 3
+---
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+setwd("~/R/WIP") #change as needed
+
+if(!require(easypackages)){install.packages("easypackages")}
+library(easypackages)
+packages("plyr", "dplyr", "ggplot2", "readr", "neuralnet", "boot", "matrixStats", "caret", prompt = FALSE)
+```
+
+# Quick Introduction
+Neural network is analogous to human nervous system. Just like human nervous system, which is made up of interconnected neurons, a neural network is made up of interconnected processing units. The information processing units do not work in a linear manner. A neural network draws its strength from parallel processing of information, which allows it to deal with non-linearity. Neural network becomes handy to infer meaning and detect patterns from complex data sets.
+
+# The Basics
+A neural network is a model characterized by an `activation function`, which is used by interconnected information processing units to transform input into output. The first layer of the neural network receives the raw input, processes it and passes the processed information to the hidden layers. The hidden layer passes information to the last layer which produces the output. The advantage of neural network is that it is adaptive. It learns from the information provided.  It trains itself from the data, which has a known outcome and optimizes its weights for a better prediction in situations with unknown outcome.
+
+A `perceptron`, or single layer neural network, is the basic form of a neural network.  A perceptron receives multidimensional input and processes it using an activation function. It is trained using a labeled data and learning algorithm that optimize the weights in the summation processor. 
+
+A neural network consists of:
+
+- **Input** layers: Layers that take inputs based on existing data
+- **Hidden** layers: Layers that use backpropagation to optimise the weights of the input variables in order to improve the predictive power of the model
+- **Output** layers: Output of predictions based on the data from the input and hidden layers
+
+```{r, out.width = "500px", echo=FALSE}
+knitr::include_graphics("../images/simple_nn0.png")
+```
+
+> A major limitation of perceptron model is its inability to deal with non-linearity. 
+
+A multilayered neural network overcomes this limitation and helps solve non-linear problems. The input layer connects with hidden layer, which in turn connects to the output layer. The connections are weighted and weights are optimized using a learning rule.
+
+There are many learning rules that are used with neural network:
+
+- least mean square
+- gradient descent
+- newton's rule
+- conjugate gradient
+- and more!
+
+The learning rules can be used with a backpropgation error method. The learning rule is used to calculate the error at the output unit. This error is backpropagated to all the units such that the error at each unit is proportional to the contribution of that unit towards total error at the output unit.  The errors at each unit are then used to optimize the weight at each connection. 
+
+```{r, out.width = "500px", echo=FALSE}
+knitr::include_graphics("../images/simple_nn1.png")
+```
+
+# Neural Networks in R
+
+## Ice Cream Rating Example
+
+Use a subset of cereal dataset shared by Carnegie Mellon University (CMU). The details of the dataset are on the following link: http://lib.stat.cmu.edu/DASL/Datafiles/Cereals.html. The objective is to predict rating of the cereals variables such as calories, proteins, fat etc. 
+
+Use `rating` as the dependent variable and `calories`, `proteins`, `fat`, `sodium` and `fiber` as the independent variables. Divide the data into training and test set. Training set is used to find the relationship between dependent and independent variables while the test set assesses the performance of the model. Use 60% of the dataset as training set. The assignment of the data to training and test set is done using random sampling.
+
+```{r getData, message=FALSE}
+data <- read_csv(file = "../data/cereals.csv")
+glimpse(data)
+```
+
+Scale the cereal dataset. The scaling of data is essential because otherwise a variable may have large impact on the prediction variable only because of its scale. Using unscaled may lead to meaningless results. The common techniques to scale data are: 
+
+- min-max normalization
+- Z-score normalization
+- median and MAD
+- tan-h
+
+The min-max normalization transforms the data into a common range, thus removing the scaling effect from all the variables. Unlike Z-score normalization and median and MAD method, the min-max method retains the original distribution of the variables.
+
+### Creating Index 
+
+```{r}
+# Random sampling
+index <- createDataPartition(y = data$rating, p = .6, list = FALSE)
+datatrain = data[ index, ]
+datatest = data[ -index, ]                            
+
+#Scaling
+my_preprocess <- preProcess(data, method = "range")
+scaled <- predict(my_preprocess, data[, ])
+
+trainNN = scaled[index, ]
+testNN = scaled[-index, ]
+``` 
+
+### Fit neural network 
+
+```{r}
+# fit neural network
+set.seed(2)
+NN = neuralnet(rating ~ calories + protein + fat + sodium + fiber, trainNN, hidden = 3 , linear.output = T )
+
+# plot neural network
+plot(NN, intercept = FALSE, rep = "best")
+#Ref:  https://stackoverflow.com/questions/41423455/knit-neuralnet-plot-to-r-markdown-presentation
+```
+
+The model has 3 neurons in its hidden layer. The black lines show the connections with weights. The weights are calculated using the back propagation algorithm.
+
+Recall the predicted rating will be scaled and it must be transformed in order to make a comparison with real rating. Also compare the predicted rating with real rating using visualization. 
+
+### Predictions
+
+```{r}
+predict_testNN = compute(NN, testNN[,c(1:5)])
+predict_testNN = (predict_testNN$net.result * (max(data$rating) - min(data$rating))) + min(data$rating)
+
+myPlot <- cbind(testNN, predict_testNN)
+
+myPlot %>% ggplot(aes(rating, predict_testNN)) + geom_point(color = "blue") + geom_smooth(method = "lm")
+```
+```{r}
+# Calculate Root Mean Square Error (RMSE)
+RMSE.NN = (sum((datatest$rating - predict_testNN)^2) / nrow(datatest)) ^ 0.5
+RMSE.NN
+```
+
+### Cross Validation
+
+We have evaluated the neural network method using RMSE, which is a residual method of evaluation. The major problem of residual evaluation methods is that it does not inform us about the behavior of our model when new data is introduced.
+
+We tried to deal with the "new data" problem by splitting our data into training and test set, constructing the model on training set and evaluating the model by calculating RMSE for the test set. The training-test split was nothing but the simplest form of cross validation method known as *holdout method*. A limitation of the holdout method is the variance of performance evaluation metric, in our case RMSE, can be high based on the elements assigned to training and test set.
+
+The most commonly used cross validation technique is k-fold cross validation. The data is partitioned into k equal subsets and each time a subset is assigned as test set while others are used for training the model. Every data point gets a chance to be in test set and training set, thus this method reduces the dependence of performance on test-training split and reduces the variance of performance metrics. 
+
+Perform k-fold cross-validation on the neural network model. The number of elements in the training set, j, are varied from 10 to 65 and for each j, 100 samples are drawn form the dataset. The rest of the elements in each case are assigned to test set. The model is trained on each of the 5600 training datasets and then tested on the corresponding test sets. Compute RMSE of each of the test set. The RMSE values for each of the set is stored in a Matrix[100 X 56]. This method ensures the  results are free of any sample bias and checks for the robustness of our model.
+
+```{r crossVal}
+# Initialize variables
+set.seed(50)
+k = 100
+RMSE.NN = NULL
+
+List = list( )
+
+# Fit neural network model within nested for loop
+for(j in 10:65){
+    for (i in 1:k) {
+        index = sample(1:nrow(data),j )
+        trainNN = scaled[index,]
+        testNN = scaled[-index,]
+        datatest = data[-index,]
+        NN = neuralnet(rating ~ calories + protein + fat + sodium + fiber, trainNN, hidden = 3, linear.output= T)
+        predict_testNN = compute(NN,testNN[,c(1:5)])
+        predict_testNN = (predict_testNN$net.result*(max(data$rating)-min(data$rating)))+min(data$rating)
+
+        RMSE.NN [i]<- (sum((datatest$rating - predict_testNN)^2)/nrow(datatest))^0.5}
+    List[[j]] = RMSE.NN}
+
+Matrix.RMSE = do.call(cbind, List)
+```
+
+The RMSE values can be accessed using the variable Matrix.RMSE. The size of the matrix is large; therefore make sense of the data through visualizations. Prepare a boxplot for one of the columns in Matrix.RMSE, where training set has length equal to 65. 
+
+### Boxplot
+```{r}
+boxplot(Matrix.RMSE[,56], ylab = "RMSE", main = "RMSE BoxPlot (length of traning set = 65)")
+```
+
+The boxplot shows the median RMSE across 100 samples when length of training set is fixed to 65. Next evalaute the variation of RMSE with the length of training set. 
+
+### Variation of median RMSE 
+```{r}
+med = colMedians(Matrix.RMSE)
+X = seq(10,65)
+plot (med~X, type = "l", xlab = "length of training set", ylab = "median RMSE", main = "Variation of RMSE with length of training set")
+```
+
+The median RMSE of our model decreases as the length of the training the set. This is an important result. Remember model accuracy is dependent on the length of training set. The performance of neural network model is sensitive to training-test split.
+
+# Classification Example
+
+https://www.r-bloggers.com/neuralnet-train-and-test-neural-networks-using-r/
+
+Goal:  Develop a neural network to determine if a stock pays a dividend or not.
+
+Use a neural network to solve a classification problem. 
+
+In the test dataset, assign a value of 1 to a stock that pays a dividend. Assign a value of 0 to a stock that does not pay a dividend. 
+
+Our independent variables are:
+
+- fcfps: Free cash flow per share (in $)
+- earnings_growth: Earnings growth in the past year (in %)
+- de: Debt to Equity ratio
+- mcap: Market Capitalization of the stock
+- current_ratio: Current Ratio (or Current Assets/Current Liabilities)
+
+## Data Normalization
+
+Data normailization transforms the data to a common scale so as to accurately compare predicted and actual values. Failure to normalize the data typically results in the prediction value remaining the same across all observations, regardless of the input values.
+
+- Scale the data frame automatically using the scale function in R
+- Transform the data using a max-min normalization technique
+
+### Scaled Normalization
+
+```{r}
+rm(list = ls())
+mydata <- read.csv("../data/dividendinfo-1.csv")
+scaleddata<-scale(mydata)
+```
+
+###Max-Min Normalization
+
+Invoke the following function to normalize the data:
+
+```{r}
+normalize <- function(x) {  return ((x - min(x)) / (max(x) - min(x)))}
+```
+
+Use lapply to run the function across our existing data (we have termed the dataset loaded into R as mydata):
+
+```{r}
+maxmindf <- as.data.frame(lapply(mydata, normalize))
+```
+
+We have now scaled our new dataset and saved it into a data frame titled maxmindf:
+
+We base our training data (trainset) on 80% of the observations. The test data (testset) is based on the remaining 20% of observations.
+
+## Training and Test Data
+
+```{r}
+trainset <- maxmindf[1:160, ]
+testset <- maxmindf[161:200, ]
+```
+
+##Training a Neural Network Model using neuralnet
+
+- Using neuralnet to "regress" the dependent "dividend" variable against the other independent variables
+- Setting the number of hidden layers to (2,1) based on the hidden=(2,1) formula
+- The linear.output variable is set to FALSE, given the impact of the independent variables on the dependent variable (dividend) is assumed to be non-linear
+- The threshold is set to 0.01, meaning that if the change in error during an iteration is less than 1%, then no further optimization will be carried out by the model
+- Deciding on the number of hidden layers in a neural network is not an exact science. In fact, there are instances where accuracy will likely be higher without any hidden layers. Therefore, trial and error plays a significant role in this process.  One possibility is to compare how the accuracy of the predictions change as the number of hidden layers is iterated.
+
+>Using a (2,1) configuration ultimately yielded 92.5% classification accuracy for this example.
+
+The  neural network looks like this:
+```{r}
+#Neural Network
+library(neuralnet)
+nn <- neuralnet(dividend ~ fcfps + earnings_growth + de + mcap + current_ratio, data=trainset, hidden=c(2,1), linear.output=FALSE, threshold=0.01)
+nn$result.matrix
+plot(nn)
+```
+
+Now generate the error of the neural network model, along with the weights between the inputs, hidden layers, and outputs:
+
+```{r}
+nn$result.matrix
+```
+
+##Testing The Accuracy Of The Model
+
+Ther neural network has been created using the training data. Compare this to the test data to gauge the accuracy of the neural network forecast.
+
+- The "subset" function is used to eliminate the dependent variable from the test data
+- The "compute" function then creates the prediction variable
+- A "results" variable then compares the predicted data with the actual data
+- A confusion matrix is then created with the table function to compare the number of true/false positives and negatives
+
+```{r}
+temp_test <- subset(testset, select = c("fcfps","earnings_growth", "de", "mcap", "current_ratio"))
+head(temp_test)
+```
+```{r}
+nn.results <- compute(nn, temp_test)
+results <- data.frame(actual = testset$dividend, prediction = nn.results$net.result)
+```
+
+The predicted results are compared to the actual results:
+
+```{r}
+results
+```
+
+###Confusion Matrix
+
+Use sapply and create a confusion matrix to compare the number of true/false positives and negatives:
+
+```{r}
+roundedresults<-sapply(results,round,digits=0)
+roundedresultsdf=data.frame(roundedresults)
+attach(roundedresultsdf)
+table(actual,prediction)
+```
+
+A confusion matrix is used to determine the number of true and false positives generated by our predictions. The model generates 17 true negatives (0's), 20 true positives (1's), while there are 3 false negatives.
+
+Ultimately, we yield an 92.5% (37/40) accuracy rate in determining whether a stock pays a dividend or not.
+
+# Solving Regression with neuralnet
+
+Fit a simple neural network using the neuralnet package and fit a linear model.
+
+## The dataset
+
+Use the Boston dataset in the MASS package.
+
+The Boston dataset is a collection of data about housing values in the suburbs of Boston. Our goal is to predict the median value of owner-occupied homes (medv) using all the other continuous variables available.
+
+```{r}
+# Set a seed
+set.seed(500)
+
+library(MASS)
+data <- Boston
+```
+
+Check that no datapoint is missing, otherwise we need to fix the dataset.
+
+```{r}
+# Check that no data is missing
+apply(data,2,function(x) sum(is.na(x)))
+```
+
+There is no missing data. Proceed by randomly splitting the data into a train and a test set, then we fit a linear regression model and test it on the test set. Note the use of `gml()`  function instead of the  `lm()`. This will become useful later when cross validating the linear model.
+
+```{r}
+# Train-test random splitting for linear model
+index <- sample(1:nrow(data),round(0.75*nrow(data)))
+train <- data[index,]
+test <- data[-index,]
+
+# Fitting linear model
+lm.fit <- glm(medv~., data=train)
+summary(lm.fit)
+
+# Predicted data from lm
+pr.lm <- predict(lm.fit,test)
+
+# Test MSE
+MSE.lm <- sum((pr.lm - test$medv)^2)/nrow(test)
+```
+
+The sample(x,size) function simply outputs a vector of the specified size of randomly selected samples from the vector x. By default the sampling is without replacement: index is essentially a random vector of indeces.
+Since we are dealing with a regression problem, we are going to use the mean squared error (MSE) as a measure of how much our predictions are far away from the real data.
+
+## Preparing to fit the neural network
+
+Before fitting a neural network, some preparation need to be done. Neural networks are not that easy to train and tune.
+
+As a first step, we are going to address data preprocessing.
+
+It is good practice to normalize your data before training a neural network. I cannot emphasize enough how important this step is: depending on your dataset, avoiding normalization may lead to useless results or to a very difficult training process (most of the times the algorithm will not converge before the number of maximum iterations allowed). You can choose different methods to scale the data (z-normalization, min-max scale, etc.). I chose to use the min-max method and scale the data in the interval [0,1]. Usually scaling in the intervals [0,1] or [-1,1] tends to give better results.
+
+We therefore scale and split the data before moving on:
+
+```{r}
+# Scaling data for the NN
+maxs <- apply(data, 2, max) 
+mins <- apply(data, 2, min)
+scaled <- as.data.frame(scale(data, center = mins, scale = maxs - mins))
+
+# Train-test split
+train_ <- scaled[index,]
+test_ <- scaled[-index,]
+```
+
+Note that scale returns a matrix that needs to be coerced into a data.frame.
+
+## Parameters
+
+As far as I know there is no fixed rule as to how many layers and neurons to use although there are several more or less accepted rules of thumb. Usually, if at all necessary, one hidden layer is enough for a vast numbers of applications. As far as the number of neurons is concerned, it should be between the input layer size and the output layer size, usually 2/3 of the input size. At least in my brief experience testing again and again is the best solution since there is no guarantee that any of these rules will fit your model best.
+
+Since this is a toy example, we are going to use 2 hidden layers with this configuration: 13:5:3:1. The input layer has 13 inputs, the two hidden layers have 5 and 3 neurons and the output layer has, of course, a single output since we are doing regression.
+
+```{r}
+# NN training
+library(neuralnet)
+n <- names(train_)
+f <- as.formula(paste("medv ~", paste(n[!n %in% "medv"], collapse = " + ")))
+nn <- neuralnet(f,data=train_,hidden=c(5,3),linear.output=T)
+```
+
+- For some reason the formula `y~.` is not accepted in the `neuralnet()` function. You need to first write the formula and then pass it as an argument in the fitting function.
+- The hidden argument accepts a vector with the number of neurons for each hidden layer, while the argument linear.output is used to specify whether we want to do regression `linear.output=TRUE` or classification `linear.output=FALSE`
+
+The neuralnet package provides a nice tool to plot the model:
+
+```{r}
+# Visual plot of the model
+plot(nn)
+```
+
+The black lines show the connections between each layer and the weights on each connection while the blue lines show the bias term added in each step. The bias can be thought as the intercept of a linear model.
+
+The net is essentially a black box so we cannot say that much about the fitting, the weights and the model. Suffice to say that the training algorithm has converged and therefore the model is ready to be used.
+
+## Predicting medv using the neural network
+
+https://datascienceplus.com/fitting-neural-network-in-r/
+Review the comments for code updates
+
+Now we can try to predict the values for the test set and calculate the MSE. Remember that the net will output a normalized prediction, so we need to scale it back in order to make a meaningful comparison (or just a simple prediction).
+
+```{r}
+# Predict
+pr.nn <- compute(nn,test_[,1:13])
+
+# Results from NN are normalized (scaled)
+# Descaling for comparison
+pr.nn_ <- pr.nn$net.result*(max(data$medv)-min(data$medv))+min(data$medv)
+test.r <- (test_$medv)*(max(data$medv)-min(data$medv))+min(data$medv)
+
+# Calculating MSE
+MSE.nn <- sum((test.r - pr.nn_)^2)/nrow(test_)
+```
+
+we then compare the two MSEs
+
+```{r}
+# Compare the two MSEs
+print(paste(MSE.lm,MSE.nn))
+```
+
+Apparently, the net is doing a better work than the linear model at predicting medv. Once again, be careful because this result depends on the train-test split performed above. Below, after the visual plot, we are going to perform a fast cross validation in order to be more confident about the results.
+A first visual approach to the performance of the network and the linear model on the test set is plotted below.
+
+```{r}
+# Plot predictions
+par(mfrow=c(1,2))
+
+plot(test$medv,pr.nn_,col='red',main='Real vs predicted NN',pch=18,cex=0.7)
+abline(0,1,lwd=2)
+legend('bottomright',legend='NN',pch=18,col='red', bty='n')
+
+plot(test$medv,pr.lm,col='blue',main='Real vs predicted lm',pch=18, cex=0.7)
+abline(0,1,lwd=2)
+legend('bottomright',legend='LM',pch=18,col='blue', bty='n', cex=.95)
+```
+
+By visually inspecting the plot we can see that the predictions made by the neural network are (in general) more concetrated around the line (a perfect alignment with the line would indicate a MSE of 0 and thus an ideal perfect prediction) than those made by the linear model.
+
+```{r}
+# Compare predictions on the same plot
+plot(test$medv,pr.nn_,col='red',main='Real vs predicted NN',pch=18,cex=0.7)
+points(test$medv,pr.lm,col='blue',pch=18,cex=0.7)
+abline(0,1,lwd=2)
+legend('bottomright',legend=c('NN','LM'),pch=18,col=c('red','blue'))
+```
+
+## A (fast) cross validation
+
+Cross validation is another very important step of building predictive models. While there are different kind of cross validation methods, the basic idea is repeating the following process a number of time:
+
+train-test split
+
+- Do the train-test split
+- Fit the model to the train set
+- Test the model on the test set
+- Calculate the prediction error
+- Repeat the process K times
+
+Then by calculating the average error we can get a grasp of how the model is doing.
+
+We are going to implement a fast cross validation using a for loop for the neural network and the `cv.glm()` function in the `boot` package for the linear model.
+
+As far as I know, there is no built-in function in R to perform cross-validation on this kind of neural network, if you do know such a function, please let me know in the comments. Here is the 10 fold cross-validated MSE for the linear model:
+
+```{r}
+library(boot)
+set.seed(200)
+
+# Linear model cross validation
+lm.fit <- glm(medv~.,data=data)
+cv.glm(data,lm.fit,K=10)$delta[1]
+```
+
+Now the net. Note that I am splitting the data in this way: 90% train set and 10% test set in a random way for 10 times. I am also initializing a progress bar using the plyr library because I want to keep an eye on the status of the process since the fitting of the neural network may take a while.
+
+```{r}
+# Neural net cross validation
+set.seed(450)
+cv.error <- NULL
+k <- 10
+
+# Initialize progress bar
+library(plyr) 
+pbar <- create_progress_bar('text')
+pbar$init(k)
+
+for(i in 1:k){
+    index <- sample(1:nrow(data),round(0.9*nrow(data)))
+    train.cv <- scaled[index,]
+    test.cv <- scaled[-index,]
+    nn <- neuralnet(f,data=train.cv,hidden=c(5,2),linear.output=T)
+    pr.nn <- compute(nn,test.cv[,1:13])
+    pr.nn <- pr.nn$net.result*(max(data$medv)-min(data$medv))+min(data$medv)
+    test.cv.r <- (test.cv$medv)*(max(data$medv)-min(data$medv))+min(data$medv)
+    cv.error[i] <- sum((test.cv.r - pr.nn)^2)/nrow(test.cv)
+    pbar$step()}
+```
+
+Alternative:  You can do cross-validation using the caret package as shown below.
+
+library(caret)
+model.nnet = train(medv~., data=train,
+method="nnet",
+preProc=c("center", "scale"))
+print(model.nnet)
+
+After a while, the process is done, we calculate the average MSE and plot the results as a boxplot
+
+```{r}
+# Average MSE
+mean(cv.error)
+
+# MSE vector from CV
+cv.error
+```
+
+```{r}
+# Visual plot of CV results
+boxplot(cv.error,xlab='MSE CV',col='cyan', border='blue',names='CV error (MSE)',
+        main='CV error (MSE) for NN',horizontal=TRUE)
+```
+
+As you can see, the average MSE for the neural network (10.33) is lower than the one of the linear model although there seems to be a certain degree of variation in the MSEs of the cross validation. This may depend on the splitting of the data or the random initialization of the weights in the net. By running the simulation different times with different seeds you can get a more precise point estimate for the average MSE.
+
+Neural networks resemble black boxes a lot: explaining their outcome is much more difficult than explaining the outcome of simpler model such as a linear model. Therefore, depending on the kind of application you need, you might want to take into account this factor too. Furthermore, as you have seen above, extra care is needed to fit a neural network and small changes can lead to different results.
+
+#Conclusion
+
+A neural network was used to solve classification problems.
+
+- Normalize data for meaningful analysis
+- Classify data using a neural network
+- Test accuracy using a confusion matrix
+- Determine accuracy when the dependent variable is in interval format
+
+# Reference
+
+https://www.analyticsvidhya.com/blog/2017/09/creating-visualizing-neural-network-in-r/
+
+# ToDo 
+https://www.r-bloggers.com/neuralnet-train-and-test-neural-networks-using-r/
+Implement cusotm function:  https://beckmw.wordpress.com/2013/11/14/visualizing-neural-networks-in-r-update/
